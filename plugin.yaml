@@ -1,0 +1,30 @@
+name: epistemic-harness
+version: 1.2.0
+description: Bounded, session-scoped inquiry workflow with explicit probe capture and conservative presentation detail
+author: Epistemic Harness contributors (AI-assisted)
+license: MIT
+homepage: https://github.com/quangphucqp/epistemic-harness
+kind: standalone
+manifest_version: 1
+requires_hermes: ">=0.21,<1.0"
+platforms:
+  - linux
+  - macos
+provides_tools:
+  - epistemic_model
+  - epistemic_probe
+provides_hooks:
+  - pre_llm_call
+  - post_tool_call
+  - transform_tool_result
+  - subagent_stop
+  - on_session_reset
+  - on_session_finalize
+provides_middleware:
+  - tool_execution
+capabilities: []
+python_dependencies: []
+tags:
+  - epistemic
+  - reasoning
+  - evidence

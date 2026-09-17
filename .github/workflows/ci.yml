@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out plugin
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install "pytest==9.1.1" "PyYAML==6.0.3"
+      - name: Run plugin tests
+        run: python -m pytest tests -q
+
+  hermes-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out plugin
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Install Hermes Agent at the reviewed API revision
+        run: >-
+          python -m pip install
+          "git+https://github.com/NousResearch/hermes-agent@9796235822b89e08597a402dad045b5b4464e474#egg=hermes-agent"
+      - name: Install native test dependencies
+        run: python -m pip install "pytest==9.1.1" "PyYAML==6.0.3"
+      - name: Run native Hermes integration tests
+        run: >-
+          python -m pytest
+          tests/test_native_capture_lifetime.py
+          tests/test_native_outer_dispatch.py
+          tests/test_native_deferred_args.py
+          -q
+      - name: Validate native plugin registration
+        run: hermes plugins validate .
+      - name: Run native Hermes runtime smoke
+        run: |
+          set -euo pipefail
+          isolated_home="$(mktemp -d "${RUNNER_TEMP}/epistemic-harness-home.XXXXXX")"
+          export HOME="$isolated_home"
+          export HERMES_HOME="$isolated_home/.hermes"
+          mkdir -p "$HERMES_HOME/plugins/epistemic-harness"
+          cp -R . "$HERMES_HOME/plugins/epistemic-harness/"
+          hermes plugins enable epistemic-harness --no-allow-tool-override
+          python tests/runtime_smoke.py "$HERMES_HOME"
