@@ -25,18 +25,30 @@ jobs:
 
   hermes-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: plugin
     steps:
       - name: Check out plugin
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: plugin
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
-      - name: Install Hermes Agent at the reviewed API revision
-        run: >-
-          python -m pip install
-          "git+https://github.com/NousResearch/hermes-agent@9796235822b89e08597a402dad045b5b4464e474#egg=hermes-agent"
+      # Hermes refuses wheel and sdist builds, so the CLI cannot be pip-installed
+      # from a Git URL. Check out the reviewed revision and install it editable,
+      # which is the supported development path.
+      - name: Check out Hermes Agent at the reviewed API revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: NousResearch/hermes-agent
+          ref: 9796235822b89e08597a402dad045b5b4464e474
+          path: hermes-agent
+      - name: Install Hermes Agent in editable mode
+        run: python -m pip install -e ../hermes-agent
       - name: Install native test dependencies
         run: python -m pip install "pytest==9.1.1" "PyYAML==6.0.3"
       - name: Run native Hermes integration tests
