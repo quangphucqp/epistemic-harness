@@ -260,9 +260,9 @@ for the current decision point; it does not require agreement with the ranking.
    - `decision_point: "close"` before `epistemic_model close`.
 
    It requires an active case with no pending probe. Read the ranking and
-   `continue_probability`. A failed, `busy`, or timed-out attempt consumes the
-   per-case attempt budget; authentication errors do not. The token budget uses
-   vendor-reported usage.
+   `continue_probability`. A failed or timed-out attempt consumes the
+   per-case attempt budget; authentication, caller-input, and `busy` errors do
+   not. The token budget uses vendor-reported usage.
 2. Decide for yourself. Record the decision with `choose`:
    - for a probe offer, `continue_same` keeps the previously chosen method and
      `continue_different` names a different offered method; `stop` does not

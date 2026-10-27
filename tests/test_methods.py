@@ -1228,6 +1228,65 @@ def test_probe_waives_after_budget_exhausted(tmp_path, enabled_key):
     assert waived and waived[-1]["payload"]["reason"] == "budget_exhausted"
 
 
+def test_probe_waives_after_failure_budget_exhausted(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    config = _config(max_calls_per_case=4, cooldown_s=0)
+
+    def boom(_request):
+        raise jev.JevTransportError("timeout", reason="timeout")
+
+    for _ in range(4):
+        assert _offer(harness, config=config, transport=boom)["reason"] == "timeout"
+    harness.model(
+        {
+            "operation": "record_evidence",
+            "evidence": [
+                {
+                    "summary": "Move the Timeline past the final failure",
+                    "source_ref": "synthetic:budget",
+                    "source_role": "primary",
+                    "access_scope": "full",
+                    "authority_domain": "external_source",
+                }
+            ],
+        },
+        session_id="s",
+    )
+    committed = harness.probe(_probe_args(), session_id="s", jev_config=config)
+    assert committed["probe"]["status"] == "committed"
+    waived = [
+        event
+        for event in harness.store.list_events("methods-case")
+        if event["type"] == "method_consultation_excused"
+    ]
+    assert waived and waived[-1]["payload"]["reason"] == "budget_exhausted"
+
+
+def test_token_limit_blocks_instead_of_waiving(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    config = _config(max_calls_per_case=4, max_input_tokens_per_case=1)
+    assert _offer(harness, config=config)["available"] is True
+    harness.model(
+        {
+            "operation": "record_evidence",
+            "evidence": [
+                {
+                    "summary": "Move the Timeline past the successful offer",
+                    "source_ref": "synthetic:token",
+                    "source_role": "primary",
+                    "access_scope": "full",
+                    "authority_domain": "external_source",
+                }
+            ],
+        },
+        session_id="s",
+    )
+    with pytest.raises(HarnessError, match="input-token budget is exhausted"):
+        harness.probe(_probe_args(), session_id="s", jev_config=config)
+
+
 def test_probe_waives_after_transport_failure(tmp_path, enabled_key):
     harness = EpistemicHarness(tmp_path)
     harness.model(_open_args(), session_id="s")
