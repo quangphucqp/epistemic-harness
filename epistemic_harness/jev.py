@@ -386,12 +386,17 @@ def build_state(
         "previous_method": budget.take(previous_method, 240) or "",
     }
     recent: list[str] = []
-    for event in events[-3:]:
-        if not isinstance(event, dict):
-            continue
+    candidates = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and str(event.get("type") or "").strip()
+        and not str(event.get("type") or "").startswith("method_")
+    ]
+    if len(candidates) > 3:
+        budget.truncated = True
+    for event in candidates[-3:]:
         event_type = str(event.get("type") or "").strip()
-        if event_type.startswith("method_"):
-            continue
         rendered = budget.take(event_type, 80)
         if rendered is not None:
             recent.append(rendered)

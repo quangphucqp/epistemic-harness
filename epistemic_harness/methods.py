@@ -188,6 +188,9 @@ def failure_state(events: list[dict[str, Any]]) -> tuple[int, float | None]:
         if event_type == OFFERED:
             break
         if event_type == OFFER_FAILED:
+            reason = str(payload(event).get("reason") or "").strip()
+            if reason not in EXCUSABLE_FAILURES:
+                break
             count += 1
             if last_time is None:
                 last_time = parse_time(event.get("timestamp"))

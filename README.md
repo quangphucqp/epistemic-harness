@@ -138,8 +138,9 @@ and plan items that declare a user-authority domain are omitted unless
 `allow_user_domain_state` is true. Candidate method text is supplied by the
 caller and is not authority-filtered; do not put private text in a candidate
 description. The `privacy` receipt reports `sent_chars` as the sum of included
-field-value characters, which excludes JSON structure, candidate texts, and the
-fixed question instructions, `request_chars` as the character count of the full
+field-value characters plus the round value, which excludes JSON structure,
+candidate texts, and the fixed question instructions, `request_chars` as the
+character count of the full
 serialized request, `truncated`, and `user_domain_omitted`. `truncated` is set
 when a per-field character cap, a fixed item-count cap, or the total
 projected-character budget drops content.

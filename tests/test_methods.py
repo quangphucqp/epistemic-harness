@@ -95,6 +95,35 @@ def test_config_rejects_non_https_endpoint():
         jev.load_config({"enabled": True, "endpoint": "http://example.com/v1"})
 
 
+def test_recent_events_cap_sets_truncated():
+    case = {
+        "case_id": "case",
+        "session_id": "session",
+        "model": {
+            "top_unknown": "Which method discriminates",
+            "decision": "Choose",
+            "stopping_condition": "Decisive evidence",
+            "state_grounding": [],
+            "mechanisms": [],
+            "alternatives": [],
+            "current_plan": [],
+        },
+    }
+    events = [
+        {"type": f"event_{index}", "payload": {}}
+        for index in range(5)
+    ]
+    state, privacy = jev.build_state(
+        case,
+        events,
+        _config(),
+        round_number=1,
+        previous_method=None,
+    )
+    assert len(state["recent_events"]) == 3
+    assert privacy["truncated"] is True
+
+
 def test_projection_excludes_case_id_session_and_evidence_refs():
     case = {
         "case_id": "SECRET-CASE",
@@ -1384,6 +1413,25 @@ def test_auth_error_does_not_waive_consultation(tmp_path, enabled_key):
     assert failed["reason"] == "auth_error"
     with pytest.raises(HarnessError, match="consultation is required before a probe"):
         harness.probe(_probe_args(), session_id="s", jev_config=_config())
+
+
+def test_auth_errors_do_not_trigger_a_cooldown_waiver(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+
+    def unauthorized(_request):
+        raise jev.JevTransportError("http_error:401", reason="auth_error")
+
+    config = _config(max_calls_per_case=4)
+    for _ in range(3):
+        failed = _offer(harness, config=config, transport=unauthorized)
+        assert failed["reason"] == "auth_error"
+    with pytest.raises(HarnessError, match="consultation is required before a probe"):
+        harness.probe(_probe_args(), session_id="s", jev_config=config)
+    assert not any(
+        event["type"] == "method_consultation_excused"
+        for event in harness.store.list_events("methods-case")
+    )
 
 
 def test_missing_key_blocks_probe(tmp_path, monkeypatch):

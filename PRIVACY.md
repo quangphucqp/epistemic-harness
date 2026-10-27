@@ -23,8 +23,9 @@ values are validated against the declared enum, and an existing tag is retained
 when a revision rewrites the item without repeating it.
 
 The `privacy` receipt's `sent_chars` is the sum of included field-value
-characters. It excludes JSON structure, the candidate method texts, and the
-fixed question instructions; `request_chars` is the character count of the full
+characters plus the round value. It excludes JSON structure, the candidate
+method texts, and the fixed question instructions; `request_chars` is the
+character count of the full
 serialized request, not its UTF-8 byte size. `truncated` is set when a per-field
 character cap, a fixed item-count cap, or the total projected-character budget
 drops content.
