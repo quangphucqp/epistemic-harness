@@ -37,7 +37,8 @@ worker may keep reading until its socket closes), and the response is capped at
 module; a multiplexed host can load one module per profile, so the process total
 can be higher. A call returns `busy` rather than starting another worker when the
 module's four slots are held by abandoned connections; a `busy` result is
-recorded as a failure and can trigger the cooldown. A timed-out call can still
+recorded but does not satisfy the mandatory gate, does not count toward the
+cooldown, and does not consume the attempt budget. A timed-out call can still
 send its one request if the transport was already blocked inside DNS or connect;
 the deadline bounds the caller, not that abandoned send. An abandoned worker
 retains its request object, including the bearer header, until it exits; the
@@ -47,7 +48,10 @@ locally as `method_offer_failed` with a short reason and does not break unrelate
 host work. When the mandatory gate applies, a `method_offer_failed` with an
 excusable reason permits the probe or closure; a 401 or 403 does not, and
 authentication errors do not consume the attempt budget. A cooldown or exhausted
-budget is recorded as `method_consultation_excused`. A missing key
+budget is recorded as `method_consultation_excused`, but a budget waiver applies
+only when the attempt limit was consumed by recorded service failures; successful
+offers that are invalidated without an answer do not create one. A reached
+input-token limit blocks. A missing key
 or invalid configuration blocks the decision until fixed or Jev is disabled.
 
 The projection is an allowlist, not a sample of the case. It excludes case and

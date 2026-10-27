@@ -2951,11 +2951,16 @@ class EpistemicHarness:
             )
         else:
             used = method_events.budget_used(events)
-            if (
-                used["attempts"] >= config.max_calls_per_case
-                or used["input_tokens"] >= config.max_input_tokens_per_case
-            ):
+            if config.max_calls_per_case <= 0:
                 waiver_reason = "budget_exhausted"
+            elif used["failures"] >= config.max_calls_per_case:
+                waiver_reason = "budget_exhausted"
+            elif used["input_tokens"] >= config.max_input_tokens_per_case:
+                raise HarnessError(
+                    "the Jev input-token budget is exhausted; the case cannot "
+                    "consult again. Disable Jev, pause the case, or start a new "
+                    "bounded case."
+                )
             else:
                 if method_events.cooldown_active(
                     events,

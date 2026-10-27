@@ -117,16 +117,20 @@ invalidates the offer. `offer` refuses to start a second offer while an
 unanswered, unexpired offer is still the Timeline tip; answer it or let it
 expire. When the gate applies and a cooldown or exhausted budget prevents advice,
 the plugin writes `method_consultation_excused` with the reason; a missing key or
-invalid configuration blocks instead. Per-case defaults are four
+invalid configuration blocks instead. A budget waiver applies only when the
+configured attempt limit was consumed by recorded service failures. A sequence
+of successful offers that the caller invalidates without answering does not
+create a budget waiver, and a reached input-token limit blocks rather than
+waiving. Per-case defaults are four
 attempts, 30,000 vendor-reported input tokens, 6,000 projected characters, and a
-30-minute offer lifetime. Failed, `busy`, and timed-out attempts consume an
-attempt permanently for that case, but authentication and caller-input errors
+30-minute offer lifetime. Failed and timed-out attempts consume an attempt
+permanently for that case, but authentication, caller-input, and `busy` errors
 do not. Repeated authentication failures therefore cannot exhaust the budget
 and open a waiver.
 The token budget is enforced against vendor-reported usage only, and only
-successful responses with an integer usage count. Three consecutive failures
-trigger a ten-minute cooldown; a `busy` result counts as a failure, and worker
-slots free only when abandoned connections exit.
+successful responses with an integer usage count. Three consecutive service
+failures trigger a ten-minute cooldown; a `busy` result does not count, and
+worker slots free only when abandoned connections exit.
 
 What is sent: the top unknown, decision, stopping condition, the offer round
 number, up to five alternatives, six grounding claims, four mechanisms, five plan
@@ -156,7 +160,7 @@ it does not enter closure calibration.
 
 ## Distribution
 
-Release 1.4.1 is a standalone MIT plugin for Hermes Agent 0.21 and later
+Release 1.4.2 is a standalone MIT plugin for Hermes Agent 0.21 and later
 within the declared `<1.0` compatibility range. Supported platforms are Linux
 and macOS; POSIX `fcntl` locking is required. The plugin declares no additional
 runtime Python dependencies. It is not enabled automatically after installation;

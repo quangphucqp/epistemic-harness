@@ -487,7 +487,7 @@ def call(
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "User-Agent": "epistemic-harness/1.4.1",
+            "User-Agent": "epistemic-harness/1.4.2",
         },
     )
     open_call = opener or urllib.request.build_opener(_NoRedirect()).open

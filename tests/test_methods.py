@@ -1457,6 +1457,72 @@ def test_four_auth_errors_do_not_exhaust_the_budget(tmp_path, enabled_key):
     )
 
 
+def test_inflight_starts_do_not_exhaust_budget(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    case = harness.store.get_case("methods-case")
+    for index in range(4):
+        case = harness.store.transition_case(
+            case,
+            event_type=method_events.OFFER_STARTED,
+            event_payload={
+                "offer_id": f"offer-inflight-{index}",
+                "round": index + 1,
+                "decision_point": "probe",
+            },
+        )["case"]
+    with pytest.raises(HarnessError, match="consultation is required before a probe"):
+        harness.probe(_probe_args(), session_id="s", jev_config=_config())
+    with pytest.raises(HarnessError, match="consultation is required before a close"):
+        harness.model(_close_args(), session_id="s", jev_config=_config())
+
+
+def test_busy_does_not_waive_consultation(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+
+    def busy(_request):
+        raise jev.JevTransportError("busy", reason="busy")
+
+    for _ in range(3):
+        assert _offer(harness, transport=busy)["reason"] == "busy"
+    with pytest.raises(HarnessError, match="consultation is required before a probe"):
+        harness.probe(_probe_args(), session_id="s", jev_config=_config())
+    assert not any(
+        event["type"] == "method_consultation_excused"
+        for event in harness.store.list_events("methods-case")
+    )
+
+
+def test_unanswered_successful_offers_do_not_waive_budget(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    config = _config(max_calls_per_case=4)
+    for index in range(4):
+        assert _offer(harness, config=config)["available"] is True
+        harness.model(
+            {
+                "operation": "record_evidence",
+                "evidence": [
+                    {
+                        "summary": f"Invalidating observation {index}",
+                        "source_ref": f"synthetic:{index}",
+                        "source_role": "primary",
+                        "access_scope": "full",
+                        "authority_domain": "external_source",
+                    }
+                ],
+            },
+            session_id="s",
+        )
+    with pytest.raises(HarnessError, match="consultation is required before a probe"):
+        harness.probe(_probe_args(), session_id="s", jev_config=config)
+    assert not any(
+        event["type"] == "method_consultation_excused"
+        for event in harness.store.list_events("methods-case")
+    )
+
+
 def test_missing_key_blocks_probe(tmp_path, monkeypatch):
     monkeypatch.setattr(jev, "api_key", lambda: "")
     harness = EpistemicHarness(tmp_path)

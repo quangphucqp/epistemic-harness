@@ -1,5 +1,5 @@
 name: epistemic-harness
-version: 1.4.1
+version: 1.4.2
 description: Bounded, session-scoped inquiry workflow with explicit probe capture, conservative presentation detail, and mandatory-when-enabled hosted method consultation
 author: Epistemic Harness contributors (AI-assisted)
 license: MIT

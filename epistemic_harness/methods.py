@@ -27,10 +27,8 @@ EXCUSABLE_FAILURES = {
     "transport_error",
     "timeout",
     "http_error",
-    "busy",
     "malformed_response",
     "jev_error",
-    "state_write_failed",
 }
 
 
@@ -151,16 +149,16 @@ def valid_current_offer(
 
 
 def budget_used(events: list[dict[str, Any]]) -> dict[str, int]:
-    unbillable = {
+    terminal_offers = {
+        str(payload(event).get("offer_id") or "")
+        for event in events_of(events, OFFERED)
+    }
+    excusable_failures = {
         str(payload(event).get("offer_id") or "")
         for event in events_of(events, OFFER_FAILED)
-        if str(payload(event).get("reason") or "").strip() not in EXCUSABLE_FAILURES
+        if str(payload(event).get("reason") or "").strip() in EXCUSABLE_FAILURES
     }
-    attempts = sum(
-        1
-        for event in events_of(events, OFFER_STARTED)
-        if str(payload(event).get("offer_id") or "") not in unbillable
-    )
+    attempts = len(terminal_offers | excusable_failures)
     tokens = 0
     for event in events_of(events, OFFERED):
         usage = payload(event).get("usage")
@@ -168,7 +166,11 @@ def budget_used(events: list[dict[str, Any]]) -> dict[str, int]:
             value = usage.get("input_tokens")
             if isinstance(value, int) and not isinstance(value, bool):
                 tokens += max(0, value)
-    return {"attempts": max(0, attempts), "input_tokens": max(0, tokens)}
+    return {
+        "attempts": max(0, attempts),
+        "failures": max(0, len(excusable_failures)),
+        "input_tokens": max(0, tokens),
+    }
 
 
 def parse_time(value: Any) -> float | None:

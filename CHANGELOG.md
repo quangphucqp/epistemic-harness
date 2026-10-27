@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.2
+
+- Count only completed attempts against the per-case budget. An attempt that
+  has started but has not produced an offer or terminal failure cannot create
+  a budget waiver while its request is still in flight.
+- Treat `busy` as a local contention result, not a service failure. It does not
+  satisfy the gate, trigger the cooldown, or consume the attempt budget.
+- Allow a budget waiver only when the configured attempt limit was consumed by
+  recorded service failures. Repeated successful offers that the caller
+  invalidates before answering do not exhaust the budget into a waiver.
+- A reached input-token limit blocks with an explicit error instead of acting
+  as a consultation waiver.
+
 ## 1.4.1
 
 - Authentication failures and caller-input failures no longer consume the
