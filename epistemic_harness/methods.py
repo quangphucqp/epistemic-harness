@@ -15,8 +15,24 @@ OFFER_STARTED = "method_offer_started"
 OFFERED = "method_offered"
 OFFER_FAILED = "method_offer_failed"
 CHOSEN = "method_chosen"
-METHOD_EVENT_TYPES = {OFFER_STARTED, OFFERED, OFFER_FAILED, CHOSEN}
+EXCUSED = "method_consultation_excused"
+METHOD_EVENT_TYPES = {OFFER_STARTED, OFFERED, OFFER_FAILED, CHOSEN, EXCUSED}
 DISPOSITIONS = {"continue_same", "continue_different", "stop"}
+DECISION_POINTS = {"probe", "close"}
+
+# A failed consultation may be waived only when the failure is not the
+# caller's fault. Caller-input errors such as bad_candidates and
+# bad_disposition must not become a way to skip the gate.
+EXCUSABLE_FAILURES = {
+    "transport_error",
+    "timeout",
+    "http_error",
+    "busy",
+    "malformed_response",
+    "jev_error",
+    "state_write_failed",
+}
+
 
 
 class MethodError(ValueError):
@@ -74,6 +90,42 @@ def previous_method_id(events: list[dict[str, Any]]) -> str | None:
         if method_id:
             return method_id
     return None
+
+
+def decision_point_of(event: dict[str, Any] | None) -> str:
+    if not isinstance(event, dict):
+        return ""
+    return str(payload(event).get("decision_point") or "").strip().lower()
+
+
+def consultation_at_tip(
+    events: list[dict[str, Any]], *, decision_point: str
+) -> dict[str, Any] | None:
+    """Return the tip consultation for one decision point, if any.
+
+    A consultation is current only while it is the last Timeline event. This
+    forces a fresh offer/choose (or a recorded waiver) immediately before the
+    decision it informs, rather than allowing one offer to cover several later
+    commitments.
+    """
+    if not events:
+        return None
+    tip = events[-1]
+    if not isinstance(tip, dict):
+        return None
+    event_type = tip.get("type")
+    if decision_point_of(tip) != decision_point:
+        return None
+    if event_type == CHOSEN:
+        return dict(payload(tip))
+    if event_type == EXCUSED:
+        return dict(payload(tip))
+    if event_type == OFFER_FAILED:
+        reason = str(payload(tip).get("reason") or "").strip()
+        if reason in EXCUSABLE_FAILURES:
+            return dict(payload(tip))
+    return None
+
 
 
 def round_number(events: list[dict[str, Any]]) -> int:
@@ -162,12 +214,17 @@ def validate_disposition(
     *,
     offer: dict[str, Any],
     previous_method: str | None,
+    decision_point: str,
 ) -> dict[str, Any]:
     disposition = str(args.get("disposition") or "").strip().lower()
     if disposition not in DISPOSITIONS:
         raise MethodError(
             "disposition must be continue_same, continue_different, or stop",
             reason="bad_disposition",
+        )
+    if decision_point not in DECISION_POINTS:
+        raise MethodError(
+            "the offer has no valid decision point", reason="bad_decision_point"
         )
     offered = {
         str(item.get("method_id") or "")
@@ -176,12 +233,24 @@ def validate_disposition(
     }
     raw_method = str(args.get("method_id") or "").strip().lower()
     note = str(args.get("note") or "").strip()[:500]
-    if disposition == "stop":
+    if decision_point == "close":
+        if disposition != "stop":
+            raise MethodError(
+                "closing the case requires disposition stop; use stop to record "
+                "the closure decision, or continue the investigation",
+                reason="bad_disposition",
+            )
         if raw_method:
             raise MethodError(
                 "stop does not take a method_id", reason="bad_disposition"
             )
         return {"disposition": disposition, "method_id": None, "note": note}
+    if disposition == "stop":
+        raise MethodError(
+            "stop does not authorize a probe; choose continue_same or "
+            "continue_different to record the method you will run",
+            reason="bad_disposition",
+        )
     if disposition == "continue_same":
         if raw_method:
             raise MethodError(

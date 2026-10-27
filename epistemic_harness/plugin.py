@@ -14,7 +14,6 @@ from .harness import EpistemicHarness, HarnessError, current_native_capture_stat
 from .jev import (
     JevConfig,
     JevConfigError,
-    api_key as jev_api_key,
     load_config as load_jev_config,
 )
 from .locking import (
@@ -39,7 +38,7 @@ _HARNESS_LOCK = threading.Lock()
 _JEV_SETTINGS: dict[Path, JevConfig | None] = {}
 _JEV_SETTINGS_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
-_RUNTIME_GENERATION = "20261027-method-advice"
+_RUNTIME_GENERATION = "20261027-mandatory-consultation"
 _SKILL_PATH = Path(__file__).resolve().parents[1] / "skills" / "epistemic-inquiry" / "SKILL.md"
 _SKILL_DESCRIPTION = (
     "A bounded, session-scoped inquiry workflow: explicit activation, claim-bound "
@@ -79,9 +78,19 @@ def _set_jev_config(config: JevConfig | None) -> None:
 
 
 def _jev_available() -> bool:
-    """Hide the optional tool unless it is enabled and the vendor key exists."""
+    """Keep the tool visible whenever the feature is enabled.
+
+    A missing key or invalid configuration must be diagnosable through
+    ``epistemic_methods`` status; hiding the tool would make the required gate
+    impossible to inspect.
+    """
     config = _jev_config()
-    return bool(config is not None and config.enabled and jev_api_key())
+    return bool(config is not None and config.enabled)
+
+
+def _active_jev_config() -> JevConfig:
+    """Return the profile config, or a disabled config before registration."""
+    return _jev_config() or JevConfig()
 
 
 def _adopt_compression_lineage(harness: EpistemicHarness, session_id: str) -> None:
@@ -156,7 +165,11 @@ def epistemic_model_handler(args: dict[str, Any], **kwargs: Any) -> str:
     if not session_id:
         return _error("epistemic_model requires a Hermes session_id")
     try:
-        result = _session_harness(session_id).model(args, session_id=session_id)
+        result = _session_harness(session_id).model(
+            args,
+            session_id=session_id,
+            jev_config=_active_jev_config(),
+        )
         if operation == "list":
             result["runtime"] = {"pid": os.getpid(), "generation": _RUNTIME_GENERATION}
         result = project_response(
@@ -182,7 +195,11 @@ def epistemic_probe_handler(args: dict[str, Any], **kwargs: Any) -> str:
     if not session_id:
         return _error("epistemic_probe requires a Hermes session_id")
     try:
-        result = _session_harness(session_id).probe(args, session_id=session_id)
+        result = _session_harness(session_id).probe(
+            args,
+            session_id=session_id,
+            jev_config=_active_jev_config(),
+        )
         result = project_response(
             result,
             response_detail=response_detail,
@@ -755,11 +772,11 @@ def register(ctx: Any) -> None:
     try:
         _set_jev_config(load_jev_config(ctx.get_config("jev", {})))
     except JevConfigError as exc:
-        _set_jev_config(None)
-        logger.warning("epistemic-harness Jev config rejected: %s", exc)
+        logger.warning("Epistemic Jev configuration is invalid: %s", exc)
+        _set_jev_config(JevConfig(enabled=True, misconfigured=True))
     except Exception:
-        _set_jev_config(None)
-        logger.warning("epistemic-harness Jev config read failed; advice disabled")
+        _set_jev_config(JevConfig(enabled=True, misconfigured=True))
+        logger.warning("epistemic-harness Jev config read failed; advice blocked")
     ctx.register_tool(
         name="epistemic_model",
         toolset="epistemic-harness",

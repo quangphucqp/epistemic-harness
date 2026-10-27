@@ -57,6 +57,7 @@ jobs:
           tests/test_native_capture_lifetime.py
           tests/test_native_outer_dispatch.py
           tests/test_native_deferred_args.py
+          tests/test_audit_fixes.py
           -q
       - name: Validate native plugin registration
         run: hermes plugins validate .

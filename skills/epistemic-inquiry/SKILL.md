@@ -248,30 +248,46 @@ The full readback is the authoritative model-facing receipt. Durable case state,
 Timeline events, captured tool results, and replay validation remain unchanged
 by response detail.
 
-## Optional method advice
+## Required method consultation
 
-`epistemic_methods` is off by default. When enabled, it asks a hosted judge to
-rank two to six candidate investigation methods that you supply, and to
-estimate whether another round would change the decision. The plugin does not
-ship a fixed method list; propose the methods that fit this case.
+`epistemic_methods` is off by default. When enabled, **you must consult it before
+each committed investigation step and before closing the case**. Following its
+recommendation remains optional. The plugin checks that a consultation happened
+for the current decision point; it does not require agreement with the ranking.
 
-Use it at a real choice point, not on every turn:
+1. Call `offer` with `decision_point` and `candidates` (or `candidates_json`):
+   - `decision_point: "probe"` before `epistemic_probe commit`;
+   - `decision_point: "close"` before `epistemic_model close`.
 
-1. `offer` with `candidates` (or `candidates_json`). It requires an active case
-   with no pending probe. Read the ranking and `continue_probability`. A failed,
-   `busy`, or timed-out attempt consumes the per-case attempt budget, and the
-   token budget uses vendor-reported usage.
+   It requires an active case with no pending probe. Read the ranking and
+   `continue_probability`. A failed, `busy`, or timed-out attempt consumes the
+   per-case attempt budget, and the token budget uses vendor-reported usage.
 2. Decide for yourself. Record the decision with `choose`:
-   - `continue_same` keeps the previously chosen method;
-   - `continue_different` names a different offered method;
-   - `stop` records that no further method selection is needed.
+   - for a probe offer, `continue_same` keeps the previously chosen method and
+     `continue_different` names a different offered method; `stop` does not
+     authorize a probe;
+   - for a close offer, `stop` records the closure decision; `continue_*` means
+     the case should remain open.
 
-   `followed_recommendation` is true only when the chosen `method_id` equals the
-   recommendation; it is always false for `stop`.
-3. `status` checks the per-case budget without a network call.
+   The chosen decision point must match the offer. `followed_recommendation` is
+   true only when the chosen `method_id` equals the recommendation; it is
+   always false for `stop`.
+3. Proceed with the committed probe or closure. A later case event invalidates
+   the offer, so consult immediately before the decision rather than earlier.
+
+If the service fails, the plugin records `method_offer_failed` with the reason.
+A 401 or 403 blocks instead of waiving, because it indicates a credential
+problem. If the case is in cooldown or the case budget is exhausted, it records
+`method_consultation_excused`. A cooldown or budget record permits the decision.
+A missing key or invalid configuration blocks until it is fixed or Jev is
+disabled; pause the case if you need to set it aside. Do not try to force a
+waiver with malformed candidates or an invalid disposition; those caller errors
+do not count.
 
 The advice is a judgment, not evidence. It cannot ground a claim, and it does
-not close the case. An offer expires and is invalidated by any later case event.
+not close the case. The gate enforces that a consultation happened; it cannot
+judge whether the candidate set was informative or whether the ranking was
+considered. Ordinary tools outside a committed probe remain available.
 
 ## Scope and privacy
 

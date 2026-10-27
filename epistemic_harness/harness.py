@@ -194,7 +194,13 @@ class EpistemicHarness:
     def __init__(self, root: str | Path):
         self.store = CaseStore(root)
 
-    def model(self, args: dict[str, Any], *, session_id: str) -> dict[str, Any]:
+    def model(
+        self,
+        args: dict[str, Any],
+        *,
+        session_id: str,
+        jev_config: jev.JevConfig | None = None,
+    ) -> dict[str, Any]:
         operation = str(args.get("operation") or "").strip().lower()
         if operation not in {
             "open",
@@ -246,7 +252,11 @@ class EpistemicHarness:
             if operation == "resume":
                 return self._resume(args, session_id=session_id)
             if operation == "close":
-                return self._close(args, session_id=session_id)
+                return self._close(
+                    args,
+                    session_id=session_id,
+                    jev_config=jev_config,
+                )
         except StoreError as exc:
             raise HarnessError(str(exc)) from exc
         raise HarnessError(
@@ -531,7 +541,13 @@ class EpistemicHarness:
             return {"status": "dormant", "case": None}
         return {"status": "aborted", "case": aborted["case"]}
 
-    def probe(self, args: dict[str, Any], *, session_id: str) -> dict[str, Any]:
+    def probe(
+        self,
+        args: dict[str, Any],
+        *,
+        session_id: str,
+        jev_config: jev.JevConfig | None = None,
+    ) -> dict[str, Any]:
         """Commit or compare one epistemic probe."""
         operation = str(args.get("operation") or "").strip().lower()
         if operation not in {"commit", "compare", "recover", "discard"}:
@@ -539,7 +555,11 @@ class EpistemicHarness:
         try:
             self.store.recover_prepared_compression(session_id)
             if operation == "commit":
-                return self._commit_probe(args, session_id=session_id)
+                return self._commit_probe(
+                    args,
+                    session_id=session_id,
+                    jev_config=jev_config,
+                )
             if operation == "compare":
                 return self._compare_probe(args, session_id=session_id)
             if operation == "recover":
@@ -593,8 +613,17 @@ class EpistemicHarness:
     ) -> dict[str, Any]:
         if not config.enabled:
             return {"available": False, "reason": "disabled"}
+        if config.misconfigured:
+            return {"available": False, "reason": "bad_config"}
         if not jev.api_key():
             return {"available": False, "reason": "no_key"}
+        decision_point = str(args.get("decision_point") or "probe").strip().lower()
+        if decision_point not in method_events.DECISION_POINTS:
+            return {
+                "available": False,
+                "reason": "bad_decision_point",
+                "detail": "decision_point must be probe or close",
+            }
         case = self._require_active(session_id)
         self._require_matching_case(args, case)
         if case.get("pending_probe") is not None:
@@ -677,6 +706,7 @@ class EpistemicHarness:
             event_payload={
                 "offer_id": offer_id,
                 "round": round_number,
+                "decision_point": decision_point,
                 "model_version": int(case.get("version", 0)),
                 "tip_event_id": tip_event_id,
                 "projection_sha256": jev.projection_digest(state),
@@ -705,6 +735,7 @@ class EpistemicHarness:
                 round_number=round_number,
                 reason=exc.reason,
                 detail=str(exc),
+                decision_point=decision_point,
             )
             return {
                 "available": False,
@@ -719,6 +750,7 @@ class EpistemicHarness:
                 round_number=round_number,
                 reason="transport_error",
                 detail=f"{type(exc).__name__}: {exc}",
+                decision_point=decision_point,
             )
             return {
                 "available": False,
@@ -737,6 +769,7 @@ class EpistemicHarness:
                 privacy=privacy,
                 candidates=candidates,
                 config=config,
+                decision_point=decision_point,
             )
         except Exception as exc:
             # A CAS loss or a write failure after the call must still leave a
@@ -747,6 +780,7 @@ class EpistemicHarness:
                 round_number=round_number,
                 reason="state_write_failed",
                 detail=f"{type(exc).__name__}: {exc}",
+                decision_point=decision_point,
             )
             return {
                 "available": False,
@@ -767,6 +801,7 @@ class EpistemicHarness:
         privacy: dict[str, Any],
         candidates: list[dict[str, str]],
         config: jev.JevConfig,
+        decision_point: str,
     ) -> dict[str, Any]:
         fresh = self.store.get_active_case(session_id)
         if fresh is None or str(fresh.get("case_id") or "") != case_id:
@@ -776,6 +811,7 @@ class EpistemicHarness:
                 round_number=round_number,
                 reason="state_changed_during_call",
                 detail="the active case changed while the advice call was in flight",
+                decision_point=decision_point,
             )
             return {"available": False, "reason": "state_changed_during_call"}
         fresh_events = self.store.list_events(case_id)
@@ -787,6 +823,7 @@ class EpistemicHarness:
                 round_number=round_number,
                 reason="state_changed_during_call",
                 detail="new case events landed while the advice call was in flight",
+                decision_point=decision_point,
             )
             return {"available": False, "reason": "state_changed_during_call"}
         expires_at = datetime.fromtimestamp(
@@ -799,6 +836,7 @@ class EpistemicHarness:
             event_payload={
                 "offer_id": offer_id,
                 "round": round_number,
+                "decision_point": decision_point,
                 "started_event_id": started_event_id,
                 "tip_event_id": tip_event_id,
                 "recommended_method_id": parsed["recommended_method_id"],
@@ -819,6 +857,7 @@ class EpistemicHarness:
             "offer_id": offer_id,
             "case_id": case_id,
             "round": round_number,
+            "decision_point": decision_point,
             "recommended_method_id": parsed["recommended_method_id"],
             "recommended_method_text": by_id.get(parsed["recommended_method_id"], ""),
             "ranking": [
@@ -856,6 +895,7 @@ class EpistemicHarness:
         round_number: int,
         reason: str,
         detail: str,
+        decision_point: str = "",
     ) -> None:
         """Best-effort failure record; never replace the turn's result."""
         try:
@@ -868,6 +908,7 @@ class EpistemicHarness:
                 event_payload={
                     "offer_id": offer_id,
                     "round": round_number,
+                    "decision_point": decision_point,
                     "reason": _redact(reason)[:80],
                     "detail": _redact(detail)[:300],
                     "failed_at": _utc_now(),
@@ -906,9 +947,26 @@ class EpistemicHarness:
         if expires is None or datetime.now(timezone.utc).timestamp() > expires:
             return {"recorded": False, "reason": "expired_offer"}
         previous = method_events.previous_method_id(events)
+        decision_point = str(offer.get("decision_point") or "probe").strip().lower()
+        if decision_point not in method_events.DECISION_POINTS:
+            return {
+                "recorded": False,
+                "reason": "bad_decision_point",
+                "detail": "the offer has no valid decision point",
+            }
+        requested_point = str(args.get("decision_point") or "").strip().lower()
+        if requested_point and requested_point != decision_point:
+            return {
+                "recorded": False,
+                "reason": "decision_point_mismatch",
+                "detail": "the chosen decision point must match the offer",
+            }
         try:
             validated = method_events.validate_disposition(
-                args, offer=offer, previous_method=previous
+                args,
+                offer=offer,
+                previous_method=previous,
+                decision_point=decision_point,
             )
         except method_events.MethodError as exc:
             return {
@@ -923,6 +981,7 @@ class EpistemicHarness:
             event_type=method_events.CHOSEN,
             event_payload={
                 "offer_id": offer["offer_id"],
+                "decision_point": decision_point,
                 "disposition": validated["disposition"],
                 "method_id": validated["method_id"],
                 "followed_recommendation": followed,
@@ -934,6 +993,7 @@ class EpistemicHarness:
             "recorded": True,
             "case_id": case_id,
             "offer_id": offer["offer_id"],
+            "decision_point": decision_point,
             "disposition": validated["disposition"],
             "method_id": validated["method_id"],
             "followed_recommendation": followed,
@@ -957,10 +1017,27 @@ class EpistemicHarness:
             events, now=datetime.now(timezone.utc).timestamp()
         )
         chosen = method_events.last_chosen(events)
+        tip = events[-1] if events else None
         return {
             "enabled": config.enabled,
+            "config_error": "invalid" if config.misconfigured else None,
             "key_present": bool(jev.api_key()),
             "case_id": case["case_id"],
+            "consultation_required": bool(config.enabled),
+            "consultation_current": method_events.consultation_at_tip(
+                events,
+                decision_point="probe",
+            )
+            is not None
+            or method_events.consultation_at_tip(
+                events,
+                decision_point="close",
+            )
+            is not None,
+            "timeline_tip": {
+                "type": str((tip or {}).get("type") or ""),
+                "decision_point": method_events.decision_point_of(tip),
+            },
             "budget": {
                 "attempts": used["attempts"],
                 "remaining_attempts": max(
@@ -975,6 +1052,7 @@ class EpistemicHarness:
                 {
                     "offer_id": offer.get("offer_id"),
                     "round": offer.get("round"),
+                    "decision_point": offer.get("decision_point"),
                     "recommended_method_id": offer.get("recommended_method_id"),
                     "continue_probability": offer.get("continue_probability"),
                     "expires_at": offer.get("expires_at"),
@@ -986,6 +1064,7 @@ class EpistemicHarness:
                 {
                     "disposition": chosen.get("disposition"),
                     "method_id": chosen.get("method_id"),
+                    "decision_point": chosen.get("decision_point"),
                 }
                 if chosen
                 else None
@@ -2110,6 +2189,7 @@ class EpistemicHarness:
             new_model[key] = _copy(value)
         events = self.store.list_events(case["case_id"])
         known_event_ids = {event["event_id"] for event in events}
+        _preserve_authority_domains(old_model, new_model)
         new_model = _normalize_model_claims(
             new_model,
             known_event_ids=known_event_ids,
@@ -2199,7 +2279,13 @@ class EpistemicHarness:
         result["replay"] = self.replay(case["case_id"])
         return result
 
-    def _commit_probe(self, args: dict[str, Any], *, session_id: str) -> dict[str, Any]:
+    def _commit_probe(
+        self,
+        args: dict[str, Any],
+        *,
+        session_id: str,
+        jev_config: jev.JevConfig | None = None,
+    ) -> dict[str, Any]:
         case = self._require_active(session_id)
         if case.get("pending_probe") is not None:
             raise HarnessError("only one pending probe is permitted")
@@ -2320,6 +2406,14 @@ class EpistemicHarness:
             probe["claim_id"] = claim_id
             probe["claim_snapshot"] = claim_snapshot
             probe["model_version"] = int(case["version"])
+        case, _events = self._ensure_consultation(
+            case,
+            decision_point="probe",
+            config=jev_config,
+        )
+        replay = self.replay(case["case_id"])
+        if not replay["usable"]:
+            raise HarnessError(f"case replay is not usable: {replay['reason']}")
         case["pending_probe"] = probe
         transition = self.store.transition_case(
             case,
@@ -2589,7 +2683,13 @@ class EpistemicHarness:
         transition["replay"] = self.replay(case_id)
         return transition
 
-    def _close(self, args: dict[str, Any], *, session_id: str) -> dict[str, Any]:
+    def _close(
+        self,
+        args: dict[str, Any],
+        *,
+        session_id: str,
+        jev_config: jev.JevConfig | None = None,
+    ) -> dict[str, Any]:
         case = self._require_active(session_id)
         self._require_settled(case, transition="close")
         if not self.replay(case["case_id"])["usable"]:
@@ -2670,6 +2770,14 @@ class EpistemicHarness:
             "calibration": calibration,
             "transfer": normalized_transfer,
         }
+        case, _events = self._ensure_consultation(
+            case,
+            decision_point="close",
+            config=jev_config,
+        )
+        self._require_settled(case, transition="close")
+        if not self.replay(case["case_id"])["usable"]:
+            raise HarnessError("case replay must pass before close")
         case["status"] = "closed"
         case["closure"] = closure
         transition = self.store.transition_case(
@@ -2792,6 +2900,93 @@ class EpistemicHarness:
             raise HarnessError(f"compare the pending probe before attempting to {transition}")
         if case.get("stale"):
             raise HarnessError(f"repair the material mismatch before attempting to {transition}")
+
+    def _ensure_consultation(
+        self,
+        case: dict[str, Any],
+        *,
+        decision_point: str,
+        config: jev.JevConfig | None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Require a current Jev consultation when the feature is enabled.
+
+        The recommendation remains advisory: this gate checks that a
+        consultation happened, not that the agent followed it. A consultation
+        counts only while it is the Timeline tip, so one offer cannot cover
+        several later commitments. A service failure is recorded as
+        `method_offer_failed`; a cooldown or exhausted budget is recorded as a
+        waiver. A missing key or invalid configuration raises and must be fixed
+        or Jev disabled.
+        """
+        case_id = str(case["case_id"])
+        events = self.store.list_events(case_id)
+        if config is None or not config.enabled:
+            return case, events
+        if config.misconfigured:
+            raise HarnessError(
+                "Jev is enabled but its configuration is invalid; fix the "
+                "settings or disable Jev before committing or closing"
+            )
+        current = method_events.consultation_at_tip(
+            events,
+            decision_point=decision_point,
+        )
+        if current is not None:
+            return case, events
+
+        now = datetime.now(timezone.utc).timestamp()
+        pending_offer = method_events.valid_current_offer(events, now=now)
+        if pending_offer is not None:
+            raise HarnessError(
+                "a Jev offer is waiting; answer it with epistemic_methods choose "
+                "before committing or closing"
+            )
+
+        waiver_reason = ""
+        if not jev.api_key():
+            raise HarnessError(
+                "Jev consultation is required but no key is available. Add the "
+                "key, disable Jev, or pause the case; a missing key is a "
+                "configuration state, not a service failure."
+            )
+        else:
+            used = method_events.budget_used(events)
+            if (
+                used["attempts"] >= config.max_calls_per_case
+                or used["input_tokens"] >= config.max_input_tokens_per_case
+            ):
+                waiver_reason = "budget_exhausted"
+            else:
+                if method_events.cooldown_active(
+                    events,
+                    now=now,
+                    max_consecutive_failures=config.max_consecutive_failures,
+                    cooldown_s=config.cooldown_s,
+                ):
+                    waiver_reason = "cooldown"
+
+        if waiver_reason:
+            transition = self.store.transition_case(
+                case,
+                event_type=method_events.EXCUSED,
+                event_payload={
+                    "decision_point": decision_point,
+                    "reason": waiver_reason,
+                    "recorded_at": _utc_now(),
+                },
+            )
+            return transition["case"], self.store.list_events(case_id)
+
+        raise HarnessError(
+            f"Jev consultation is required before a {decision_point} decision. "
+            f"Call epistemic_methods with operation='offer' and "
+            f"decision_point='{decision_point}', then operation='choose'. "
+            "The recommendation is advisory; record your own disposition. "
+            "A verified service failure or a cooldown or exhausted budget may "
+            "permit continuation after the plugin records the failure or waiver. "
+            "A missing key or invalid configuration must be fixed, or Jev disabled."
+        )
+
 
     def _require_active(self, session_id: str) -> dict[str, Any]:
         case = self.store.get_active_case(session_id)
@@ -3037,6 +3232,13 @@ def _normalize_model_claims(
         ):
             raise HarnessError(f"plan step {step_id} depends_on must be an array")
         plan_ids.add(step_id)
+        authority = step.get("authority_domain")
+        if authority is not None:
+            if not isinstance(authority, str) or authority.strip().lower() not in _AUTHORITY_DOMAINS:
+                raise HarnessError(
+                    f"plan step {step_id} has an invalid authority_domain"
+                )
+            step["authority_domain"] = authority.strip().lower()
     available_ids = seen_ids | plan_ids
     for step in plan:
         unknown = sorted(set(step.get("depends_on") or []) - available_ids)
@@ -3138,6 +3340,28 @@ def _model_items_by_id(model: dict[str, Any]) -> dict[str, dict[str, Any]]:
             if isinstance(item, dict) and item.get("id"):
                 items[str(item["id"])] = item
     return items
+
+
+def _preserve_authority_domains(
+    old_model: dict[str, Any], new_model: dict[str, Any]
+) -> None:
+    """Keep an existing authority tag when a revised item omits the field.
+
+    A revise replaces whole arrays. Without this merge, routinely rewriting a
+    claim or plan step would silently drop its user-authority tag and let the
+    text enter hosted advice. An explicit different authority value still wins.
+    """
+    old_items = _model_items_by_id(old_model)
+    for section in ("state_grounding", "mechanisms", "alternatives", "current_plan"):
+        for item in new_model.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("authority_domain") is not None:
+                continue
+            previous = old_items.get(str(item.get("id") or ""))
+            if isinstance(previous, dict) and previous.get("authority_domain"):
+                item["authority_domain"] = previous["authority_domain"]
+
 
 
 def _substantive_item_signature(item: dict[str, Any]) -> str:

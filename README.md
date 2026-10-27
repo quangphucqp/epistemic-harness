@@ -46,15 +46,31 @@ Three model-facing tools:
 
 - `epistemic_model`: `open`, `list`, `show`, `record_evidence`, `revise`, `pause`, `resume`, `close`
 - `epistemic_probe`: `commit`, `compare`, `recover`, `discard`
-- `epistemic_methods`: `offer`, `choose`, `status` (optional; hidden unless the Jev advice setting is enabled)
+- `epistemic_methods`: `offer`, `choose`, `status` (optional; visible when the Jev setting is enabled)
 
-## Optional Jev method advice
+## Jev consultation
 
-`epistemic_methods` is disabled by default and hidden when disabled. It asks a
-hosted TypeSafe/Jev judge to rank a caller-supplied list of investigation methods
-and to estimate whether another round would change the decision. It does not
-generate methods: the agent, or any other proposer, supplies two to six
-candidates for the current case, and the judge ranks them.
+`epistemic_methods` is disabled by default and hidden when disabled. When
+enabled, it asks a hosted TypeSafe/Jev judge to rank a caller-supplied list of
+investigation methods and to estimate whether another round would change the
+decision. It does not generate methods: the agent, or any other proposer,
+supplies two to six candidates for the current case, and the judge ranks them.
+
+When the feature is enabled, **consultation is required before each committed
+probe and before closing a case**. Following the recommendation is optional.
+The gate checks that an offer was answered for the current decision point; it
+does not require the agent to agree with the ranking. A verified service failure
+is recorded as `method_offer_failed` and permits the decision; a 401 or 403
+does not, because it indicates a credential problem rather than a temporary
+outage. A cooldown or exhausted budget is recorded as
+`method_consultation_excused`. A missing key or invalid configuration blocks
+the decision until it is fixed or Jev is disabled; `pause` remains available so
+the case can be set aside.
+
+The gate enforces procedure, not judgment. It cannot tell whether the candidate
+methods were serious, whether the agent understood the ranking, or whether the
+chosen method was the best available. Ordinary tools outside a committed probe
+remain available without a consultation.
 
 Enable it under `plugins.entries.epistemic-harness.settings.jev`:
 
@@ -68,6 +84,7 @@ plugins:
           model: jev-latest
           max_calls_per_case: 4
           timeout_s: 6
+          allow_user_domain_state: false
 ```
 
 `TYPESAFE_API_KEY` must be available through Hermes's profile secret scope. The
@@ -78,26 +95,35 @@ gateway after changing it.
 
 The three operations:
 
-- `offer` requires an active, replay-usable case with no pending probe. It sends a bounded
+- `offer` requires an active, replay-usable case with no pending probe. Set
+  `decision_point` to `probe` before a committed investigation step, or `close`
+  before closing the case; it defaults to `probe`. It sends a bounded
   projection and returns `offer_id`, a ranking, a recommended method,
   `continue_probability`, `confidence`, and an expiry time.
-- `choose` records `continue_same`, `continue_different` (with `method_id`), or
-  `stop`. It derives `followed_recommendation`, which is true only when the
-  chosen `method_id` equals the recommendation; it is always false for `stop`
-  and does not measure agreement with `continue_probability`. It cannot close,
-  pause, stale, or execute anything.
-- `status` reports the per-case budget and current offer without a network call.
+- `choose` records the decision. For a `probe` offer, use `continue_same` or
+  `continue_different` (with `method_id`); `stop` does not authorize a probe.
+  For a `close` offer, use `stop`; a `continue_*` disposition means the case
+  should remain open. `followed_recommendation` is true only when the chosen
+  `method_id` equals the recommendation; it is always false for `stop` and does
+  not measure agreement with `continue_probability`. It cannot close, pause,
+  stale, or execute anything. The chosen decision point must match the offer.
+- `status` reports the per-case budget, current offer, and whether the
+  consultation at the Timeline tip satisfies the probe or close gate, without a
+  network call.
 
 Every `offer` is written to the Timeline as `method_offer_started` and
 `method_offered`; failures are `method_offer_failed`. Any later case event
 invalidates the offer. `offer` refuses to start a second offer while an
 unanswered, unexpired offer is still the Timeline tip; answer it or let it
-expire. Per-case defaults are four attempts, 30,000 vendor-reported input tokens,
-6,000 projected characters, and a 30-minute offer lifetime. Failed, `busy`, and
-timed-out attempts consume an attempt permanently for that case; the token
-budget is enforced against vendor-reported usage only. Three consecutive
-failures trigger a ten-minute cooldown; a `busy` result counts as a failure, and
-worker slots free only when abandoned connections exit.
+expire. When the gate applies and a cooldown or exhausted budget prevents advice,
+the plugin writes `method_consultation_excused` with the reason; a missing key or
+invalid configuration blocks instead. Per-case defaults are four
+attempts, 30,000 vendor-reported input tokens, 6,000 projected characters, and a
+30-minute offer lifetime. Failed, `busy`, and timed-out attempts consume an
+attempt permanently for that case; the token budget is enforced against
+vendor-reported usage only, and only successful responses with an integer usage
+count. Three consecutive failures trigger a ten-minute cooldown; a `busy` result
+counts as a failure, and worker slots free only when abandoned connections exit.
 
 What is sent: the top unknown, decision, stopping condition, the offer round
 number, up to five alternatives, six grounding claims, four mechanisms, five plan
@@ -109,18 +135,24 @@ allowlist. Free-text values also pass through credential redaction and a
 best-effort path, URL, DOI, and event-ID scrubber; free text can still describe a
 location without matching a pattern, so the scrubber is not a guarantee. Claims
 and plan items that declare a user-authority domain are omitted unless
-`allow_user_domain_state` is true. The `privacy` receipt reports `sent_chars` for
-the projected case fields, which excludes candidate texts and the fixed question
-instructions, `request_chars` for the full serialized request, `truncated`, and
-`user_domain_omitted`. The endpoint must be `https`, redirects are refused, and
-the response is capped at 256 KB.
+`allow_user_domain_state` is true. Candidate method text is supplied by the
+caller and is not authority-filtered; do not put private text in a candidate
+description. The `privacy` receipt reports `sent_chars` as the sum of included
+field-value characters, which excludes JSON structure, candidate texts, and the
+fixed question instructions, `request_chars` as the character count of the full
+serialized request, `truncated`, and `user_domain_omitted`. `truncated` is set
+when a per-field character cap, a fixed item-count cap, or the total
+projected-character budget drops content.
+`user_domain_included` is true only when a user-authority item was actually
+included. The endpoint must be `https`, redirects are refused, and the response
+is capped at 256 KB.
 
 Advice is a model judgment, not source evidence. It cannot ground a claim, and
 it does not enter closure calibration.
 
 ## Distribution
 
-Release 1.3.1 is a standalone MIT plugin for Hermes Agent 0.21 and later
+Release 1.4.0 is a standalone MIT plugin for Hermes Agent 0.21 and later
 within the declared `<1.0` compatibility range. Supported platforms are Linux
 and macOS; POSIX `fcntl` locking is required. The plugin declares no additional
 runtime Python dependencies. It is not enabled automatically after installation;
@@ -233,7 +265,7 @@ consequential model revision. It does not mean "old" or "inactive."
 
 ## Probe cycle
 
-1. For a high-value uncertainty, optionally call `epistemic_probe(commit)` with purpose, unknown/goal, tool name/arguments, predicted outcomes, what would change the belief, rationale, and authority domain. Add `claim_id` to bind the probe to one existing `state_grounding`, `mechanisms`, or `alternatives` claim; the server stores an immutable `claim_snapshot` and `model_version`.
+1. For a high-value uncertainty, if you choose to commit a probe, call `epistemic_probe(commit)` with purpose, unknown/goal, tool name/arguments, predicted outcomes, what would change the belief, rationale, and authority domain. Add `claim_id` to bind the probe to one existing `state_grounding`, `mechanisms`, or `alternatives` claim; the server stores an immutable `claim_snapshot` and `model_version`.
 2. Call the intended ordinary Hermes tool by itself. Argument drift is recorded rather than blocked; parallel same-name calls cannot share one probe.
 3. `epistemic_probe(compare)` with `match`, `mismatch`, or `unresolved`. A claim-bound comparison must also state `belief_change`: `strengthened`, `weakened`, `narrowed`, `unchanged`, or `unresolved`. This is separate from observation disposition.
 4. If mismatch is material, call `epistemic_model(revise)` with a consequential update and `addresses_event_ids` containing the mismatch event.
@@ -378,4 +410,4 @@ The Timeline hash chain is tamper-evident, not cryptographically authenticated: 
 
 This implementation requires POSIX `fcntl` locks. It refuses to start on platforms without them rather than silently weakening cross-process resume and execution-lease guarantees. Replay is integrity-safe but not a linearizable multi-file read snapshot; a concurrent transition can make one diagnostic replay internally older/newer than another, while all writes remain CAS-checked and serialized.
 
-The optional method-advice tool adds one outbound HTTPS request when explicitly enabled. Its ranking reflects the candidates it was given; a method omitted from the candidate list cannot be recommended. The judge is not calibrated against research outcomes, and the recorded advice does not establish that a method improved a decision. Vendor availability, latency, and retention are outside the plugin's control. Free-text locator scrubbing is best-effort, and a redelivery of an already completed dispatch with the same tool-call ID is not deduplicated by this plugin.
+The method-consultation tool adds one outbound HTTPS request when explicitly enabled. When enabled, it is mandatory before each committed probe and before closure, while following its ranking remains optional. Its ranking reflects the candidates it was given; a method omitted from the candidate list cannot be recommended. The judge is not calibrated against research outcomes, and the recorded advice does not establish that a method improved a decision. The consultation gate is enforced on the model-facing `epistemic_probe` commit and `epistemic_model` close paths; a process that writes the case store directly is outside that boundary, and ordinary unprobed tools remain usable. Vendor availability, latency, and retention are outside the plugin's control. Free-text locator scrubbing is best-effort, and a redelivery of an already completed dispatch with the same tool-call ID is not deduplicated by this plugin.

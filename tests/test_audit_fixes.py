@@ -43,6 +43,22 @@ def test_claim_arrays_keep_sub_properties_through_the_runtime_sanitizer():
     assert updates["current_plan"]["items"]["required"] == ["id", "action"]
     assert "authority_domain" in cleaned["properties"]["current_plan"]["items"]["properties"]
     assert "authority_domain" in updates["current_plan"]["items"]["properties"]
+    expected_authority = {
+        "user_preference",
+        "user_intent",
+        "private_context",
+        "user_decision",
+        "user_testimony",
+        "external_source",
+        "system_state",
+        "empirical_test",
+    }
+    assert set(
+        cleaned["properties"]["current_plan"]["items"]["properties"]["authority_domain"]["enum"]
+    ) == expected_authority
+    assert set(
+        updates["current_plan"]["items"]["properties"]["authority_domain"]["enum"]
+    ) == expected_authority
 
 
 def test_probe_evidence_descriptor_keeps_sub_properties():

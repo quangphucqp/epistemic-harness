@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.4.0
+
+- When the optional Jev client is enabled, consultation is now required before
+  each committed probe and before closing a case. Following the recommendation
+  remains optional; the gate requires a recorded `offer` and `choose`, not
+  agreement with the ranking.
+- Each consultation carries a `decision_point` of `probe` or `close`. A
+  consultation is valid only at the Timeline tip and only for the decision it
+  was requested for, so one offer cannot cover several later commitments.
+- A probe offer requires `continue_same` or `continue_different`; `stop` does
+  not authorize a probe. A close offer requires `stop`; a `continue_*`
+  disposition means the case should remain open.
+- The plugin records `method_offer_failed` for a verified service failure and
+  `method_consultation_excused` for a cooldown or exhausted budget. Either
+  record permits the gated decision, except that a 401 or 403 is not treated as
+  a temporary failure. Caller errors such as malformed candidates or an invalid
+  disposition do not create a waiver. A missing key or invalid configuration
+  blocks until fixed or Jev is disabled.
+- Plan authority values are now validated against the declared enum, and an
+  existing authority tag is retained when a revision rewrites the item without
+  repeating it.
+- Corrected the privacy receipt wording: `sent_chars` is the sum of included
+  field-value characters, not the serialized payload size; `request_chars` is a
+  character count, not a UTF-8 byte count. `truncated` now also reports a fixed
+  item-count cap. Candidate text is explicitly documented as caller-supplied and
+  not authority-filtered.
+- Added the schema-sanitizer regression to the Hermes CI job and strengthened
+  its assertions for the plan authority enum.
+
 ## 1.3.1
 
 - Documented the privacy receipt precisely: `sent_chars` counts the projected

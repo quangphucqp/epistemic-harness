@@ -457,13 +457,15 @@ PROBE_SCHEMA = {
 METHODS_SCHEMA = {
     "name": "epistemic_methods",
     "description": (
-        "Optional advice on whether to continue a bounded inquiry and which candidate "
-        "investigation method to run next. Supply the candidate methods yourself; the "
-        "hosted judge ranks them and estimates whether another round would change the "
-        "decision. Disabled by default. The advice is recorded in the Timeline and never "
-        "grounds a claim, closes a case, or executes a method. Use offer to request an "
-        "offer, choose to record continue_same, continue_different, or stop, and status "
-        "to inspect the per-case budget without a network call."
+        "Consult the hosted judge about whether to continue a bounded inquiry and "
+        "which candidate investigation method to run next. Supply the candidate "
+        "methods yourself; the judge ranks them and estimates whether another round "
+        "would change the decision. When enabled, consultation is required before "
+        "each committed probe and before closing a case; following the recommendation "
+        "remains optional. Disabled by default. The advice is recorded in the Timeline "
+        "and never grounds a claim, closes a case, or executes a method. Use offer to "
+        "request an offer, choose to record continue_same, continue_different, or stop, "
+        "and status to inspect the per-case budget without a network call."
     ),
     "parameters": {
         "type": "object",
@@ -485,6 +487,16 @@ METHODS_SCHEMA = {
                 "description": (
                     "For choose: the offer being answered. Omit to answer the current "
                     "unanswered offer."
+                ),
+            },
+            "decision_point": {
+                "type": "string",
+                "enum": ["probe", "close"],
+                "description": (
+                    "Which decision the consultation informs. Use probe before a "
+                    "committed investigation step and close before closing the case. "
+                    "Defaults to probe for backward compatibility; a close gate needs "
+                    "an explicit close offer."
                 ),
             },
             "candidates": {
@@ -519,9 +531,9 @@ METHODS_SCHEMA = {
                 "type": "string",
                 "enum": ["continue_same", "continue_different", "stop"],
                 "description": (
-                    "For choose: continue with the previously chosen method, continue "
-                    "with a named different method, or stop selecting methods. Stop is a "
-                    "recorded disposition, not case closure."
+                    "For a probe offer: continue_same or continue_different; stop "
+                    "does not authorize a probe. For a close offer: stop; continue_* "
+                    "means the case should remain open."
                 ),
             },
             "method_id": {

@@ -434,7 +434,7 @@ def test_response_detail_survives_native_schema_sanitizer_when_available():
 def test_manifest_declares_public_release_metadata():
     root = Path(__file__).parents[1]
     manifest = yaml.safe_load((root / "plugin.yaml").read_text(encoding="utf-8"))
-    assert manifest["version"] == "1.3.1"
+    assert manifest["version"] == "1.4.0"
     assert manifest["license"] == "MIT"
     assert manifest["platforms"] == ["linux", "macos"]
     assert "AI-assisted" in manifest["author"]

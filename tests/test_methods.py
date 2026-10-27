@@ -92,7 +92,7 @@ def test_config_disabled_by_default():
 
 def test_config_rejects_non_https_endpoint():
     with pytest.raises(jev.JevConfigError):
-        jev.load_config({"endpoint": "http://example.com/v1"})
+        jev.load_config({"enabled": True, "endpoint": "http://example.com/v1"})
 
 
 def test_projection_excludes_case_id_session_and_evidence_refs():
@@ -283,7 +283,12 @@ def test_offer_budget_exhausted(tmp_path, enabled_key):
     config = _config(max_calls_per_case=1)
     assert _offer(harness, config=config)["available"] is True
     harness.methods(
-        {"operation": "choose", "disposition": "stop"}, session_id="s"
+        {
+            "operation": "choose",
+            "disposition": "continue_different",
+            "method_id": "m2",
+        },
+        session_id="s",
     )
     second = _offer(harness, config=config)
     assert second["available"] is False
@@ -350,7 +355,7 @@ def test_offer_state_changed_during_call(tmp_path, enabled_key):
     assert "method_offer_failed" in types
 
 
-def test_choose_continue_same_and_stop(tmp_path, enabled_key):
+def test_choose_continue_same_and_close_stop(tmp_path, enabled_key):
     harness = EpistemicHarness(tmp_path)
     harness.model(_open_args(), session_id="s")
     config = _config(max_calls_per_case=3)
@@ -376,7 +381,16 @@ def test_choose_continue_same_and_stop(tmp_path, enabled_key):
     assert same["recorded"] is True
     assert same["method_id"] == "m1"
 
-    third = _offer(harness, config=config)
+    third = harness.methods(
+        {
+            "operation": "offer",
+            "decision_point": "close",
+            "candidates": CANDIDATES,
+        },
+        session_id="s",
+        jev_config=config,
+        transport=lambda request: _reply("m2"),
+    )
     stopped = harness.methods(
         {"operation": "choose", "disposition": "stop", "note": "enough"},
         session_id="s",
@@ -520,15 +534,11 @@ def test_handler_disabled_returns_structured_result(tmp_path, monkeypatch):
     assert result == {"available": False, "reason": "disabled"}
 
 
-def test_jev_available_requires_enabled_and_key(monkeypatch):
+def test_jev_available_tracks_enabled_config(monkeypatch):
     plugin.reset_for_tests()
     plugin._set_jev_config(jev.JevConfig(enabled=False))
-    monkeypatch.setattr(plugin, "jev_api_key", lambda: "key")
     assert plugin._jev_available() is False
     plugin._set_jev_config(jev.JevConfig(enabled=True))
-    monkeypatch.setattr(plugin, "jev_api_key", lambda: "")
-    assert plugin._jev_available() is False
-    monkeypatch.setattr(plugin, "jev_api_key", lambda: "key")
     assert plugin._jev_available() is True
     plugin.reset_for_tests()
 
@@ -729,7 +739,16 @@ def test_previous_method_survives_stop(tmp_path, enabled_key):
         },
         session_id="s",
     )
-    second = _offer(harness, config=config)
+    second = harness.methods(
+        {
+            "operation": "offer",
+            "decision_point": "close",
+            "candidates": CANDIDATES,
+        },
+        session_id="s",
+        jev_config=config,
+        transport=lambda request: _reply("m2"),
+    )
     harness.methods(
         {"operation": "choose", "offer_id": second["offer_id"], "disposition": "stop"},
         session_id="s",
@@ -1087,6 +1106,413 @@ def test_plan_authority_tag_is_case_insensitive():
     )
     assert "moon is cheese" not in json.dumps(state)
     assert privacy["user_domain_omitted"] == 1
+
+
+def _probe_args() -> dict:
+    return {
+        "operation": "commit",
+        "purpose": "learn",
+        "unknown_or_goal": "Whether the synthetic read changes the claim",
+        "tool_name": "read_file",
+        "tool_args": {"path": "synthetic.txt"},
+        "predicted_outcomes": [{"outcome": "the file is present"}],
+        "why_this_action": "the designated synthetic read",
+        "would_change_belief": "the file contradicts the claim",
+        "authority_domain": "external_source",
+    }
+
+
+def _close_args() -> dict:
+    return {
+        "operation": "close",
+        "outcome": "stopped",
+        "summary": "Synthetic close",
+        "transfer": {"decision": "none"},
+    }
+
+
+def test_probe_commit_requires_consultation_when_enabled(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    with pytest.raises(HarnessError, match="consultation is required before a probe"):
+        harness.probe(_probe_args(), session_id="s", jev_config=_config())
+    assert not any(
+        event["type"] == "probe_committed"
+        for event in harness.store.list_events("methods-case")
+    )
+
+    offered = _offer(harness)
+    chosen = harness.methods(
+        {
+            "operation": "choose",
+            "offer_id": offered["offer_id"],
+            "disposition": "continue_different",
+            "method_id": "m2",
+        },
+        session_id="s",
+    )
+    assert chosen["recorded"] is True
+    committed = harness.probe(_probe_args(), session_id="s", jev_config=_config())
+    assert committed["probe"]["status"] == "committed"
+
+
+def test_close_requires_consultation_when_enabled(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    with pytest.raises(HarnessError, match="consultation is required before a close"):
+        harness.model(_close_args(), session_id="s", jev_config=_config())
+    assert harness.store.get_case("methods-case")["status"] == "active"
+
+    offered = harness.methods(
+        {
+            "operation": "offer",
+            "decision_point": "close",
+            "candidates": CANDIDATES,
+        },
+        session_id="s",
+        jev_config=_config(),
+        transport=lambda _request: _reply("m2"),
+    )
+    assert offered["available"] is True
+    harness.methods(
+        {"operation": "choose", "offer_id": offered["offer_id"], "disposition": "stop"},
+        session_id="s",
+    )
+    closed = harness.model(_close_args(), session_id="s", jev_config=_config())
+    assert closed["case"]["status"] == "closed"
+
+
+def test_probe_waives_after_budget_exhausted(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    committed = harness.probe(
+        _probe_args(),
+        session_id="s",
+        jev_config=_config(max_calls_per_case=0),
+    )
+    assert committed["probe"]["status"] == "committed"
+    waived = [
+        event
+        for event in harness.store.list_events("methods-case")
+        if event["type"] == "method_consultation_excused"
+    ]
+    assert waived and waived[-1]["payload"]["reason"] == "budget_exhausted"
+
+
+def test_probe_waives_after_transport_failure(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+
+    def boom(_request):
+        raise jev.JevTransportError("timeout", reason="timeout")
+
+    failed = _offer(harness, transport=boom)
+    assert failed["reason"] == "timeout"
+    committed = harness.probe(_probe_args(), session_id="s", jev_config=_config())
+    assert committed["probe"]["status"] == "committed"
+
+
+def test_bad_candidates_do_not_waive_consultation(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    bad = harness.methods(
+        {
+            "operation": "offer",
+            "candidates": [{"method_id": "m1", "text": "Only one candidate"}],
+        },
+        session_id="s",
+        jev_config=_config(),
+    )
+    assert bad["reason"] == "bad_candidates"
+    with pytest.raises(HarnessError, match="consultation is required before a probe"):
+        harness.probe(_probe_args(), session_id="s", jev_config=_config())
+
+
+def test_plan_authority_invalid_value_is_rejected(tmp_path):
+    harness = EpistemicHarness(tmp_path)
+    args = _open_args()
+    args["current_plan"][0]["authority_domain"] = "user-testimony"
+    with pytest.raises(HarnessError, match="invalid authority_domain"):
+        harness.model(args, session_id="s")
+
+
+def test_revise_preserves_an_existing_authority_tag(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    args = _open_args()
+    args["current_plan"][0]["authority_domain"] = "user_testimony"
+    harness.model(args, session_id="s")
+    harness.model(
+        {
+            "operation": "revise",
+            "reason": "clarify the plan wording",
+            "updates": {
+                "current_plan": [
+                    {
+                        "id": "P1",
+                        "action": "Initial read, clarified",
+                        "depends_on": ["M1"],
+                    }
+                ]
+            },
+        },
+        session_id="s",
+    )
+    captured: dict = {}
+
+    def transport(request):
+        captured["request"] = request
+        return _reply("m2")
+
+    result = _offer(harness, transport=transport)
+    assert result["privacy"]["user_domain_omitted"] == 1
+    assert "Initial read, clarified" not in json.dumps(captured["request"])
+
+
+def test_followed_recommendation_is_false_for_close_stop(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    offered = harness.methods(
+        {
+            "operation": "offer",
+            "decision_point": "close",
+            "candidates": CANDIDATES,
+        },
+        session_id="s",
+        jev_config=_config(),
+        transport=lambda request: _reply("m2"),
+    )
+    chosen = harness.methods(
+        {"operation": "choose", "offer_id": offered["offer_id"], "disposition": "stop"},
+        session_id="s",
+    )
+    assert chosen["followed_recommendation"] is False
+
+
+def test_choose_rejects_a_mismatched_decision_point(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    offered = _offer(harness)
+    chosen = harness.methods(
+        {
+            "operation": "choose",
+            "offer_id": offered["offer_id"],
+            "decision_point": "close",
+            "disposition": "stop",
+        },
+        session_id="s",
+    )
+    assert chosen["recorded"] is False
+    assert chosen["reason"] == "decision_point_mismatch"
+
+
+def test_probe_choose_stop_is_rejected(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    offered = _offer(harness)
+    chosen = harness.methods(
+        {"operation": "choose", "offer_id": offered["offer_id"], "disposition": "stop"},
+        session_id="s",
+    )
+    assert chosen["recorded"] is False
+    assert chosen["reason"] == "bad_disposition"
+    with pytest.raises(HarnessError, match="a Jev offer is waiting"):
+        harness.probe(_probe_args(), session_id="s", jev_config=_config())
+
+
+def test_close_choose_continue_is_rejected(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    offered = harness.methods(
+        {
+            "operation": "offer",
+            "decision_point": "close",
+            "candidates": CANDIDATES,
+        },
+        session_id="s",
+        jev_config=_config(),
+        transport=lambda request: _reply("m2"),
+    )
+    chosen = harness.methods(
+        {
+            "operation": "choose",
+            "offer_id": offered["offer_id"],
+            "disposition": "continue_different",
+            "method_id": "m2",
+        },
+        session_id="s",
+    )
+    assert chosen["recorded"] is False
+    assert chosen["reason"] == "bad_disposition"
+
+
+def test_config_disabled_ignores_invalid_endpoint():
+    config = jev.load_config({"enabled": False, "endpoint": "http://insecure"})
+    assert config.enabled is False
+
+
+def test_config_rejects_non_mapping_and_unknown_keys():
+    with pytest.raises(jev.JevConfigError):
+        jev.load_config(True)
+    with pytest.raises(jev.JevConfigError):
+        jev.load_config({"enable": True})
+
+
+def test_config_rejects_unknown_enabled_value():
+    with pytest.raises(jev.JevConfigError):
+        jev.load_config({"enabled": "ture"})
+
+
+def test_misconfigured_gate_blocks_probe(tmp_path):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    with pytest.raises(HarnessError, match="configuration is invalid"):
+        harness.probe(
+            _probe_args(),
+            session_id="s",
+            jev_config=jev.JevConfig(enabled=True, misconfigured=True),
+        )
+
+
+def test_auth_error_does_not_waive_consultation(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+
+    def unauthorized(_request):
+        raise jev.JevTransportError("http_error:401", reason="auth_error")
+
+    failed = _offer(harness, transport=unauthorized)
+    assert failed["reason"] == "auth_error"
+    with pytest.raises(HarnessError, match="consultation is required before a probe"):
+        harness.probe(_probe_args(), session_id="s", jev_config=_config())
+
+
+def test_missing_key_blocks_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(jev, "api_key", lambda: "")
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    with pytest.raises(HarnessError, match="no key is available"):
+        harness.probe(_probe_args(), session_id="s", jev_config=_config())
+
+
+def test_invalid_probe_does_not_write_a_waiver(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    bad = _probe_args()
+    bad.pop("tool_name")
+    with pytest.raises(HarnessError, match="missing probe fields"):
+        harness.probe(
+            bad,
+            session_id="s",
+            jev_config=_config(max_calls_per_case=0),
+        )
+    assert not any(
+        event["type"] == "method_consultation_excused"
+        for event in harness.store.list_events("methods-case")
+    )
+
+
+def test_invalid_close_does_not_write_a_waiver(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    bad = _close_args()
+    bad["outcome"] = "bogus"
+    with pytest.raises(HarnessError, match="outcome must be"):
+        harness.model(
+            bad,
+            session_id="s",
+            jev_config=_config(max_calls_per_case=0),
+        )
+    assert not any(
+        event["type"] == "method_consultation_excused"
+        for event in harness.store.list_events("methods-case")
+    )
+
+
+def test_consultation_is_invalidated_by_a_later_case_event(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    offered = _offer(harness)
+    harness.methods(
+        {
+            "operation": "choose",
+            "offer_id": offered["offer_id"],
+            "disposition": "continue_different",
+            "method_id": "m2",
+        },
+        session_id="s",
+    )
+    harness.model(
+        {
+            "operation": "record_evidence",
+            "evidence": [
+                {
+                    "summary": "A synthetic observation",
+                    "source_ref": "synthetic:observation",
+                    "source_role": "primary",
+                    "access_scope": "full",
+                    "authority_domain": "external_source",
+                }
+            ],
+        },
+        session_id="s",
+    )
+    with pytest.raises(HarnessError, match="a Jev offer is waiting|consultation is required"):
+        harness.probe(_probe_args(), session_id="s", jev_config=_config())
+
+
+def test_unanswered_offer_blocks_commit_even_at_budget(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    config = _config(max_calls_per_case=1)
+    offered = _offer(harness, config=config)
+    assert offered["available"] is True
+    with pytest.raises(HarnessError, match="offer is waiting"):
+        harness.probe(_probe_args(), session_id="s", jev_config=config)
+    assert not any(
+        event["type"] == "probe_committed"
+        for event in harness.store.list_events("methods-case")
+    )
+    harness.methods(
+        {
+            "operation": "choose",
+            "offer_id": offered["offer_id"],
+            "disposition": "continue_different",
+            "method_id": "m2",
+        },
+        session_id="s",
+    )
+    assert (
+        harness.probe(_probe_args(), session_id="s", jev_config=config)["probe"]["status"]
+        == "committed"
+    )
+
+
+def test_plugin_handlers_enforce_consultation(tmp_path, monkeypatch, enabled_key):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    plugin.reset_for_tests()
+    plugin._set_jev_config(_config())
+    harness = plugin._get_harness()
+    harness.model(_open_args(), session_id="s")
+
+    blocked = json.loads(
+        plugin.epistemic_probe_handler(_probe_args(), session_id="s")
+    )
+    assert "consultation is required before a probe" in blocked["error"]
+
+    offered = _offer(harness)
+    harness.methods(
+        {
+            "operation": "choose",
+            "offer_id": offered["offer_id"],
+            "disposition": "continue_different",
+            "method_id": "m2",
+        },
+        session_id="s",
+    )
+    committed = json.loads(
+        plugin.epistemic_probe_handler(_probe_args(), session_id="s")
+    )
+    assert committed["probe"]["status"] == "committed"
 
 
 def test_dispatch_registry_clears_on_exception(tmp_path):

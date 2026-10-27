@@ -14,6 +14,18 @@ disabled by default and hidden unless `settings.jev.enabled` is true and
 `TYPESAFE_API_KEY` resolves through the profile secret scope. It does not modify
 Hermes core.
 
+When the client is enabled, its use is mandatory before each committed probe and
+before a case closure. The recommendation is not binding: the gate requires a
+recorded offer and disposition, not agreement. A service failure is recorded as
+`method_offer_failed` and permits the decision; a 401 or 403 does not, because
+it indicates a credential problem. A cooldown or exhausted budget is recorded
+as `method_consultation_excused` and also permits it. A missing key or invalid
+configuration blocks the decision until the configuration is fixed or Jev is
+disabled; `pause` remains available. This gate is enforced by the plugin's case
+transitions; it does not authorize or execute an investigation method. It
+covers the model-facing commit and close paths; a process that writes the case
+store directly is outside this boundary.
+
 ## Optional outbound advice
 
 When enabled, `epistemic_methods` sends one POST per `offer` to the configured
@@ -31,8 +43,11 @@ the deadline bounds the caller, not that abandoned send. An abandoned worker
 retains its request object, including the bearer header, until it exits; the
 four-worker cap bounds how many can be retained. The client never logs the vendor key, request headers, or an HTTP error
 body. A transport, HTTP, malformed-response, or state-change failure is recorded
-locally as `method_offer_failed` with a short reason and does not block the host
-turn.
+locally as `method_offer_failed` with a short reason and does not break unrelated
+host work. When the mandatory gate applies, a `method_offer_failed` with an
+excusable reason permits the probe or closure; a 401 or 403 does not. A cooldown
+or exhausted budget is recorded as `method_consultation_excused`. A missing key
+or invalid configuration blocks the decision until fixed or Jev is disabled.
 
 The projection is an allowlist, not a sample of the case. It excludes case and
 session identifiers, evidence references and locators, probe arguments and

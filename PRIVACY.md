@@ -5,22 +5,29 @@ under `$HERMES_HOME/epistemic-harness/`, does not transmit that state, does not
 index it in a remote service, and does not export it automatically.
 
 The optional `epistemic_methods` tool is the single exception, and it is disabled
-by default. When explicitly enabled, an `offer` request sends one bounded,
-redacted projection of the active case to the configured HTTPS endpoint (TypeSafe
-by default). The projection contains the top unknown, decision, stopping
-condition, the offer round number, a small number of claim and plan texts, short
-recent event types, the previous method, and the candidate methods supplied by
-the caller. It excludes
+by default. When explicitly enabled, the plugin requires a consultation before
+each committed probe and before closing a case, and each `offer` request sends
+one bounded, redacted projection of the active case to the configured HTTPS
+endpoint (TypeSafe by default). The projection contains the top unknown,
+decision, stopping condition, the offer round number, a small number of claim
+and plan texts, short recent event types, the previous method, and the candidate
+methods supplied by the caller. It excludes
 case and session IDs, evidence references and locators, probe arguments or
 results, prior lessons, closure text, and artifact paths by the structured
 allowlist. Free-text values pass through credential redaction and a best-effort
 path, URL, DOI, and event-ID scrubber; a location described in prose can still
 survive the pattern filter. Claims and plan items that declare a user-authority
-domain are omitted unless `allow_user_domain_state` is set.
+domain are omitted unless `allow_user_domain_state` is set. Candidate method
+text is supplied by the caller and is not authority-filtered. Plan authority
+values are validated against the declared enum, and an existing tag is retained
+when a revision rewrites the item without repeating it.
 
-The `privacy` receipt's `sent_chars` counts only the projected case fields. It
-excludes the candidate method texts and the fixed question instructions;
-`request_chars` is the full serialized request body.
+The `privacy` receipt's `sent_chars` is the sum of included field-value
+characters. It excludes JSON structure, the candidate method texts, and the
+fixed question instructions; `request_chars` is the character count of the full
+serialized request, not its UTF-8 byte size. `truncated` is set when a per-field
+character cap, a fixed item-count cap, or the total projected-character budget
+drops content.
 
 The vendor key is resolved through Hermes's profile secret scope, with a process
 environment fallback for standalone use. The plugin does not read `.env` or a

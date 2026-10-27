@@ -26,6 +26,21 @@ from urllib.parse import urlparse
 
 _DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 _DEFAULT_MODEL = "jev-latest"
+_CONFIG_KEYS = {
+    "enabled",
+    "model",
+    "endpoint",
+    "timeout_s",
+    "max_calls_per_case",
+    "max_input_tokens_per_case",
+    "max_state_chars",
+    "max_candidates",
+    "max_candidate_chars",
+    "offer_ttl_s",
+    "max_consecutive_failures",
+    "cooldown_s",
+    "allow_user_domain_state",
+}
 _MAX_RESPONSE_BYTES = 262_144
 _MAX_INFLIGHT_WORKERS = 4
 _WORKER_SLOTS = threading.BoundedSemaphore(_MAX_INFLIGHT_WORKERS)
@@ -79,6 +94,7 @@ class JevConfig:
     """Configuration for the optional hosted judge."""
 
     enabled: bool = False
+    misconfigured: bool = False
     model: str = _DEFAULT_MODEL
     endpoint: str = _DEFAULT_ENDPOINT
     timeout_s: float = 6.0
@@ -113,11 +129,32 @@ def _clamp_float(value: Any, default: float, low: float, high: float) -> float:
 
 def load_config(raw: Any) -> JevConfig:
     """Normalize plugin settings without raising into the host turn."""
-    if not isinstance(raw, dict):
+    if raw is None:
         raw = {}
+    if isinstance(raw, bool):
+        if not raw:
+            return JevConfig(enabled=False)
+        raise JevConfigError("jev settings must be a mapping, not a boolean")
+    if not isinstance(raw, dict):
+        raise JevConfigError("jev settings must be a mapping")
     enabled = raw.get("enabled", False)
     if not isinstance(enabled, bool):
-        enabled = str(enabled).strip().lower() in {"1", "true", "yes", "on"}
+        text = str(enabled).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            enabled = True
+        elif text in {"0", "false", "no", "off", ""}:
+            enabled = False
+        else:
+            raise JevConfigError(
+                "jev enabled must be a boolean or one of true/false/yes/no/on/off"
+            )
+    unknown = sorted(set(raw) - _CONFIG_KEYS)
+    if unknown:
+        raise JevConfigError(
+            "unknown jev setting(s): " + ", ".join(unknown)
+        )
+    if not enabled:
+        return JevConfig(enabled=False)
     endpoint = str(raw.get("endpoint") or _DEFAULT_ENDPOINT).strip()
     parsed = urlparse(endpoint)
     if parsed.scheme != "https" or not parsed.netloc:
@@ -235,6 +272,7 @@ class _Budget:
         self.used = 0
         self.truncated = False
         self.user_domain_omitted = 0
+        self.user_domain_included = 0
 
     def take(self, value: Any, cap: int) -> str | None:
         text = _scrub_locators(_redact(value))
@@ -271,6 +309,8 @@ def _claim_texts(
     texts: list[str] = []
     if not isinstance(items, list):
         return texts
+    if len(items) > count:
+        budget.truncated = True
     for item in items[:count]:
         if not isinstance(item, dict):
             continue
@@ -278,6 +318,8 @@ def _claim_texts(
         if authority in _USER_AUTHORITY_DOMAINS and not allow_user_domain_state:
             budget.user_domain_omitted += 1
             continue
+        if authority in _USER_AUTHORITY_DOMAINS:
+            budget.user_domain_included += 1
         text = item.get("text") or item.get("action") or item.get("summary")
         rendered = budget.take(text, cap)
         if rendered is not None:
@@ -358,7 +400,7 @@ def build_state(
         "sent_chars": budget.used + len(str(state["case"].get("round") or "")),
         "truncated": budget.truncated,
         "user_domain_omitted": budget.user_domain_omitted,
-        "user_domain_included": bool(config.allow_user_domain_state),
+        "user_domain_included": budget.user_domain_included > 0,
         "fields": [
             "top_unknown",
             "decision",
@@ -440,7 +482,7 @@ def call(
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "User-Agent": "epistemic-harness/1.3.1",
+            "User-Agent": "epistemic-harness/1.4.0",
         },
     )
     open_call = opener or urllib.request.build_opener(_NoRedirect()).open
@@ -469,8 +511,9 @@ def call(
                     chunks.append(chunk)
                     total += len(chunk)
         except urllib.error.HTTPError as exc:
+            reason = "auth_error" if exc.code in {401, 403} else "http_error"
             raise JevTransportError(
-                f"http_error:{exc.code}", reason="http_error"
+                f"http_error:{exc.code}", reason=reason
             ) from exc
         except JevError:
             raise
