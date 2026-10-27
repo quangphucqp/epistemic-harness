@@ -186,13 +186,27 @@ MODEL_SCHEMA = {
             "top_unknown": {"type": "string"},
             "current_plan": {
                 "type": "array",
-                "description": "Plan items require id and action; depends_on contains known claim or plan IDs.",
+                "description": "Plan items require id and action; depends_on contains known claim or plan IDs. An optional authority_domain marks a step that must not enter hosted advice by default.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "id": {"type": "string"},
                         "action": {"type": "string"},
                         "depends_on": {"type": "array", "items": {"type": "string"}},
+                        "authority_domain": {
+                            "type": "string",
+                            "enum": [
+                                "user_preference",
+                                "user_intent",
+                                "private_context",
+                                "user_decision",
+                                "user_testimony",
+                                "external_source",
+                                "system_state",
+                                "empirical_test",
+                            ],
+                            "description": "Optional authority class for this plan step; user-authority steps are omitted from hosted advice unless allow_user_domain_state is true.",
+                        },
                     },
                     "required": ["id", "action"],
                 },
@@ -253,6 +267,19 @@ MODEL_SCHEMA = {
                                 "id": {"type": "string"},
                                 "action": {"type": "string"},
                                 "depends_on": {"type": "array", "items": {"type": "string"}},
+                                "authority_domain": {
+                                    "type": "string",
+                                    "enum": [
+                                        "user_preference",
+                                        "user_intent",
+                                        "private_context",
+                                        "user_decision",
+                                        "user_testimony",
+                                        "external_source",
+                                        "system_state",
+                                        "empirical_test",
+                                    ],
+                                },
                             },
                             "required": ["id", "action"],
                         },

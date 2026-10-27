@@ -66,7 +66,7 @@ def _open_payload(case_id: str = "plugin-case") -> dict:
 
 def test_manifest_uses_only_native_hermes_hooks():
     manifest = yaml.safe_load((Path(__file__).parents[1] / "plugin.yaml").read_text())
-    assert manifest["version"] == "1.3.0"
+    assert manifest["version"] == "1.3.1"
     assert manifest["kind"] == "standalone"
     assert manifest["provides_hooks"] == [
         "pre_llm_call",

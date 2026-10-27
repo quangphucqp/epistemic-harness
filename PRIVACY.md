@@ -15,8 +15,12 @@ case and session IDs, evidence references and locators, probe arguments or
 results, prior lessons, closure text, and artifact paths by the structured
 allowlist. Free-text values pass through credential redaction and a best-effort
 path, URL, DOI, and event-ID scrubber; a location described in prose can still
-survive the pattern filter. Claims and plan items in the user-authority domains
-are omitted unless `allow_user_domain_state` is set.
+survive the pattern filter. Claims and plan items that declare a user-authority
+domain are omitted unless `allow_user_domain_state` is set.
+
+The `privacy` receipt's `sent_chars` counts only the projected case fields. It
+excludes the candidate method texts and the fixed question instructions;
+`request_chars` is the full serialized request body.
 
 The vendor key is resolved through Hermes's profile secret scope, with a process
 environment fallback for standalone use. The plugin does not read `.env` or a

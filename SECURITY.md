@@ -18,16 +18,18 @@ Hermes core.
 
 When enabled, `epistemic_methods` sends one POST per `offer` to the configured
 HTTPS endpoint. The endpoint is validated as HTTPS at config load and again at
-the network boundary, redirects are refused, the call returns at a hard total
-deadline regardless of header or body drip (an abandoned transport worker may
-keep reading until its socket closes), and the response is capped at
-256 KB. At most four transport workers may be in flight; a call returns
-`busy` rather than starting another worker when all four are held by
-abandoned connections. A timed-out call can still send its one request if the
-transport was already blocked inside DNS or connect; the deadline bounds the
-caller, not that abandoned send. An abandoned worker retains its request object,
-including the bearer header, until it exits; the four-worker cap bounds how many
-can be retained. The client never logs the vendor key, request headers, or an HTTP error
+the network boundary, redirects are refused, the caller returns at a hard
+caller-side deadline regardless of header or body drip (an abandoned transport
+worker may keep reading until its socket closes), and the response is capped at
+256 KB. At most four transport workers may be in flight per loaded plugin
+module; a multiplexed host can load one module per profile, so the process total
+can be higher. A call returns `busy` rather than starting another worker when the
+module's four slots are held by abandoned connections; a `busy` result is
+recorded as a failure and can trigger the cooldown. A timed-out call can still
+send its one request if the transport was already blocked inside DNS or connect;
+the deadline bounds the caller, not that abandoned send. An abandoned worker
+retains its request object, including the bearer header, until it exits; the
+four-worker cap bounds how many can be retained. The client never logs the vendor key, request headers, or an HTTP error
 body. A transport, HTTP, malformed-response, or state-change failure is recorded
 locally as `method_offer_failed` with a short reason and does not block the host
 turn.

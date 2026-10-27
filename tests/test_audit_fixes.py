@@ -41,6 +41,8 @@ def test_claim_arrays_keep_sub_properties_through_the_runtime_sanitizer():
     updates = cleaned["properties"]["updates"]["properties"]
     assert updates["mechanisms"]["items"]["properties"]["epistemic_status"]
     assert updates["current_plan"]["items"]["required"] == ["id", "action"]
+    assert "authority_domain" in cleaned["properties"]["current_plan"]["items"]["properties"]
+    assert "authority_domain" in updates["current_plan"]["items"]["properties"]
 
 
 def test_probe_evidence_descriptor_keeps_sub_properties():

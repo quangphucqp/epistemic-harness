@@ -257,12 +257,17 @@ ship a fixed method list; propose the methods that fit this case.
 
 Use it at a real choice point, not on every turn:
 
-1. `offer` with `candidates` (or `candidates_json`). Read the ranking and
-   `continue_probability`.
+1. `offer` with `candidates` (or `candidates_json`). It requires an active case
+   with no pending probe. Read the ranking and `continue_probability`. A failed,
+   `busy`, or timed-out attempt consumes the per-case attempt budget, and the
+   token budget uses vendor-reported usage.
 2. Decide for yourself. Record the decision with `choose`:
    - `continue_same` keeps the previously chosen method;
    - `continue_different` names a different offered method;
    - `stop` records that no further method selection is needed.
+
+   `followed_recommendation` is true only when the chosen `method_id` equals the
+   recommendation; it is always false for `stop`.
 3. `status` checks the per-case budget without a network call.
 
 The advice is a judgment, not evidence. It cannot ground a claim, and it does

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.3.1
+
+- Documented the privacy receipt precisely: `sent_chars` counts the projected
+  case fields only and excludes candidate texts and fixed question instructions;
+  `request_chars` is the full serialized body.
+- Declared `authority_domain` on plan items so a user-authority plan step
+  survives schema sanitization and is omitted from hosted advice by default.
+- Defined `followed_recommendation` narrowly: it is true only when the chosen
+  method equals the recommendation, and always false for `stop`.
+- Documented that failed, `busy`, and timed-out attempts consume the per-case
+  attempt budget; the token budget uses vendor-reported usage only; and a `busy`
+  result counts toward the cooldown.
+- Clarified that the four-worker cap applies per loaded plugin module, that the
+  caller deadline is not a worker-cancellation guarantee, and that a timed-out
+  call can still send its one request.
+- Renamed the privacy receipt field `recent_event_types` to the payload key
+  `recent_events`.
+- Added the missing `timeout_s` setting and the explicit-enable step to the
+  README.
+
 ## 1.3.0
 
 - Added the optional `epistemic_methods` tool (`offer`, `choose`, `status`) for
@@ -16,13 +36,15 @@
   `method_offer_failed`, and `method_chosen` Timeline events. Advice is not
   evidence and does not enter closure calibration.
 - Added a best-effort free-text scrubber for common path, URL, DOI, and event-ID
-  shapes; excluded plan items that carry a user-authority domain; capped the
-  vendor model label; clamped token usage at zero; and enforced a total request
-  deadline in addition to the per-read socket timeout.
+  shapes; excluded plan items that declare a user-authority domain; capped the
+  vendor model label; clamped token usage at zero; and enforced a caller-side
+  total deadline in addition to the per-read socket timeout.
 - The transport now runs open, headers, body, and parse in a daemon worker
-  joined at the total deadline; at most four such workers may be in flight,
-  and a call returns `busy` when all four are held by abandoned connections.
-  Timeouts report `reason: timeout` rather than the generic transport code.
+  joined at the total deadline; at most four such workers may be in flight per
+  loaded plugin module, and a call returns `busy` when all four are held by
+  abandoned connections. Timeouts report `reason: timeout` rather than the
+  generic transport code. Failed, `busy`, and timed-out attempts consume the
+  per-case attempt budget.
 - Added `offer_pending` so a second offer cannot invalidate a live unanswered
   one, and made `status` ignore expired or superseded offers.
 - Excluded `epistemic_methods` from probe targets and from the middleware probe

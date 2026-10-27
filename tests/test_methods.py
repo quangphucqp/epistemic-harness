@@ -609,6 +609,29 @@ def test_plan_user_domain_is_filtered():
     assert privacy["user_domain_omitted"] == 1
 
 
+def test_plan_authority_survives_open_and_is_filtered(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    args = _open_args("plan-authority-case")
+    args["current_plan"] = [
+        {
+            "id": "P1",
+            "action": "QP privately said the moon is cheese",
+            "authority_domain": "user_testimony",
+        }
+    ]
+    harness.model(args, session_id="s")
+    captured: dict = {}
+
+    def transport(request):
+        captured["request"] = request
+        return _reply("m2")
+
+    result = _offer(harness, transport=transport)
+    assert result["available"] is True
+    assert "moon is cheese" not in json.dumps(captured["request"])
+    assert result["privacy"]["user_domain_omitted"] == 1
+
+
 def test_projection_scrubs_locators_and_event_ids():
     case = {
         "model": {

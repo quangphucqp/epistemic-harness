@@ -368,7 +368,7 @@ def build_state(
             "state_grounding",
             "mechanisms",
             "plan",
-            "recent_event_types",
+            "recent_events",
             "previous_method",
         ],
     }
@@ -440,7 +440,7 @@ def call(
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "User-Agent": "epistemic-harness/1.3.0",
+            "User-Agent": "epistemic-harness/1.3.1",
         },
     )
     open_call = opener or urllib.request.build_opener(_NoRedirect()).open

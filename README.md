@@ -67,6 +67,7 @@ plugins:
           enabled: true
           model: jev-latest
           max_calls_per_case: 4
+          timeout_s: 6
 ```
 
 `TYPESAFE_API_KEY` must be available through Hermes's profile secret scope. The
@@ -77,20 +78,26 @@ gateway after changing it.
 
 The three operations:
 
-- `offer` sends a bounded projection and returns `offer_id`, a ranking, a
-  recommended method, `continue_probability`, `confidence`, and an expiry time.
+- `offer` requires an active, replay-usable case with no pending probe. It sends a bounded
+  projection and returns `offer_id`, a ranking, a recommended method,
+  `continue_probability`, `confidence`, and an expiry time.
 - `choose` records `continue_same`, `continue_different` (with `method_id`), or
-  `stop`. It derives `followed_recommendation`. It cannot close, pause, stale, or
-  execute anything.
+  `stop`. It derives `followed_recommendation`, which is true only when the
+  chosen `method_id` equals the recommendation; it is always false for `stop`
+  and does not measure agreement with `continue_probability`. It cannot close,
+  pause, stale, or execute anything.
 - `status` reports the per-case budget and current offer without a network call.
 
 Every `offer` is written to the Timeline as `method_offer_started` and
 `method_offered`; failures are `method_offer_failed`. Any later case event
 invalidates the offer. `offer` refuses to start a second offer while an
 unanswered, unexpired offer is still the Timeline tip; answer it or let it
-expire. Per-case defaults are four attempts, 30,000 input tokens, 6,000 projected
-characters, and a 30-minute offer lifetime. Three consecutive failures trigger a
-ten-minute cooldown.
+expire. Per-case defaults are four attempts, 30,000 vendor-reported input tokens,
+6,000 projected characters, and a 30-minute offer lifetime. Failed, `busy`, and
+timed-out attempts consume an attempt permanently for that case; the token
+budget is enforced against vendor-reported usage only. Three consecutive
+failures trigger a ten-minute cooldown; a `busy` result counts as a failure, and
+worker slots free only when abandoned connections exit.
 
 What is sent: the top unknown, decision, stopping condition, the offer round
 number, up to five alternatives, six grounding claims, four mechanisms, five plan
@@ -101,10 +108,10 @@ prior lessons, closure text, and artifact paths are excluded by the structured
 allowlist. Free-text values also pass through credential redaction and a
 best-effort path, URL, DOI, and event-ID scrubber; free text can still describe a
 location without matching a pattern, so the scrubber is not a guarantee. Claims
-and plan items in the user-authority domains are omitted unless
+and plan items that declare a user-authority domain are omitted unless
 `allow_user_domain_state` is true. The `privacy` receipt reports `sent_chars` for
-the included values,
-`request_chars` for the full serialized request, `truncated`, and
+the projected case fields, which excludes candidate texts and the fixed question
+instructions, `request_chars` for the full serialized request, `truncated`, and
 `user_domain_omitted`. The endpoint must be `https`, redirects are refused, and
 the response is capped at 256 KB.
 
@@ -113,10 +120,12 @@ it does not enter closure calibration.
 
 ## Distribution
 
-Release 1.3.0 is a standalone MIT plugin for Hermes Agent 0.21 and later
+Release 1.3.1 is a standalone MIT plugin for Hermes Agent 0.21 and later
 within the declared `<1.0` compatibility range. Supported platforms are Linux
 and macOS; POSIX `fcntl` locking is required. The plugin declares no additional
-runtime Python dependencies. Validate an unpacked tree with:
+runtime Python dependencies. It is not enabled automatically after installation;
+enable it with `hermes plugins enable epistemic-harness`, then restart the
+gateway so the tools and hooks register. Validate an unpacked tree with:
 
 ```bash
 hermes plugins validate /path/to/epistemic-harness
