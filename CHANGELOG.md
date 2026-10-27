@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.1
+
+- Authentication failures and caller-input failures no longer consume the
+  per-case attempt budget, so repeated 401 or 403 responses cannot exhaust the
+  budget and produce a `method_consultation_excused` waiver. Both probe and close remain blocked
+  until a real consultation succeeds, Jev is disabled, or the configured
+  service failure or budget exemption is actually reached.
+- Documented that failed, `busy`, and timed-out attempts consume the attempt
+  budget, while authentication and caller-input errors do not.
+
 ## 1.4.0
 
 - When the optional Jev client is enabled, consultation is now required before

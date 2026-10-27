@@ -1434,6 +1434,29 @@ def test_auth_errors_do_not_trigger_a_cooldown_waiver(tmp_path, enabled_key):
     )
 
 
+def test_four_auth_errors_do_not_exhaust_the_budget(tmp_path, enabled_key):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="s")
+    config = _config(max_calls_per_case=4)
+
+    def unauthorized(_request):
+        raise jev.JevTransportError("http_error:401", reason="auth_error")
+
+    for _ in range(12):
+        failed = _offer(harness, config=config, transport=unauthorized)
+        assert failed["reason"] == "auth_error"
+    status = harness.methods({"operation": "status"}, session_id="s", jev_config=config)
+    assert status["budget"]["attempts"] == 0
+    with pytest.raises(HarnessError, match="consultation is required before a probe"):
+        harness.probe(_probe_args(), session_id="s", jev_config=config)
+    with pytest.raises(HarnessError, match="consultation is required before a close"):
+        harness.model({"operation": "close", **_close_args()}, session_id="s", jev_config=config)
+    assert not any(
+        event["type"] == "method_consultation_excused"
+        for event in harness.store.list_events("methods-case")
+    )
+
+
 def test_missing_key_blocks_probe(tmp_path, monkeypatch):
     monkeypatch.setattr(jev, "api_key", lambda: "")
     harness = EpistemicHarness(tmp_path)

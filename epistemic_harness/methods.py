@@ -151,7 +151,16 @@ def valid_current_offer(
 
 
 def budget_used(events: list[dict[str, Any]]) -> dict[str, int]:
-    attempts = max(0, len(events_of(events, OFFER_STARTED)))
+    unbillable = {
+        str(payload(event).get("offer_id") or "")
+        for event in events_of(events, OFFER_FAILED)
+        if str(payload(event).get("reason") or "").strip() not in EXCUSABLE_FAILURES
+    }
+    attempts = sum(
+        1
+        for event in events_of(events, OFFER_STARTED)
+        if str(payload(event).get("offer_id") or "") not in unbillable
+    )
     tokens = 0
     for event in events_of(events, OFFERED):
         usage = payload(event).get("usage")
@@ -159,7 +168,7 @@ def budget_used(events: list[dict[str, Any]]) -> dict[str, int]:
             value = usage.get("input_tokens")
             if isinstance(value, int) and not isinstance(value, bool):
                 tokens += max(0, value)
-    return {"attempts": attempts, "input_tokens": max(0, tokens)}
+    return {"attempts": max(0, attempts), "input_tokens": max(0, tokens)}
 
 
 def parse_time(value: Any) -> float | None:

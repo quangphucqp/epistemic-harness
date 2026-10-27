@@ -45,8 +45,9 @@ four-worker cap bounds how many can be retained. The client never logs the vendo
 body. A transport, HTTP, malformed-response, or state-change failure is recorded
 locally as `method_offer_failed` with a short reason and does not break unrelated
 host work. When the mandatory gate applies, a `method_offer_failed` with an
-excusable reason permits the probe or closure; a 401 or 403 does not. A cooldown
-or exhausted budget is recorded as `method_consultation_excused`. A missing key
+excusable reason permits the probe or closure; a 401 or 403 does not, and
+authentication errors do not consume the attempt budget. A cooldown or exhausted
+budget is recorded as `method_consultation_excused`. A missing key
 or invalid configuration blocks the decision until fixed or Jev is disabled.
 
 The projection is an allowlist, not a sample of the case. It excludes case and

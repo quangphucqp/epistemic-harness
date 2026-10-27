@@ -120,10 +120,13 @@ the plugin writes `method_consultation_excused` with the reason; a missing key o
 invalid configuration blocks instead. Per-case defaults are four
 attempts, 30,000 vendor-reported input tokens, 6,000 projected characters, and a
 30-minute offer lifetime. Failed, `busy`, and timed-out attempts consume an
-attempt permanently for that case; the token budget is enforced against
-vendor-reported usage only, and only successful responses with an integer usage
-count. Three consecutive failures trigger a ten-minute cooldown; a `busy` result
-counts as a failure, and worker slots free only when abandoned connections exit.
+attempt permanently for that case, but authentication and caller-input errors
+do not. Repeated authentication failures therefore cannot exhaust the budget
+and open a waiver.
+The token budget is enforced against vendor-reported usage only, and only
+successful responses with an integer usage count. Three consecutive failures
+trigger a ten-minute cooldown; a `busy` result counts as a failure, and worker
+slots free only when abandoned connections exit.
 
 What is sent: the top unknown, decision, stopping condition, the offer round
 number, up to five alternatives, six grounding claims, four mechanisms, five plan
@@ -153,7 +156,7 @@ it does not enter closure calibration.
 
 ## Distribution
 
-Release 1.4.0 is a standalone MIT plugin for Hermes Agent 0.21 and later
+Release 1.4.1 is a standalone MIT plugin for Hermes Agent 0.21 and later
 within the declared `<1.0` compatibility range. Supported platforms are Linux
 and macOS; POSIX `fcntl` locking is required. The plugin declares no additional
 runtime Python dependencies. It is not enabled automatically after installation;
