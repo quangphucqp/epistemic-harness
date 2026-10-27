@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.3.0
+
+- Added the optional `epistemic_methods` tool (`offer`, `choose`, `status`) for
+  hosted Jev advice on whether to continue an inquiry and which candidate
+  investigation method to run next. It is disabled by default, hidden when
+  disabled, and cannot open, revise, pause, close, or execute anything.
+- Candidate methods are supplied per case; the plugin ships no fixed method
+  taxonomy. The judge ranks the offered candidates and estimates whether another
+  round would change the decision.
+- Added an explicit, redacted projection allowlist, HTTPS-only endpoint
+  validation, redirect refusal, response size cap, per-case attempt and token
+  budgets, offer expiry, and a consecutive-failure cooldown.
+- Recorded method advice as `method_offer_started`, `method_offered`,
+  `method_offer_failed`, and `method_chosen` Timeline events. Advice is not
+  evidence and does not enter closure calibration.
+- Added a best-effort free-text scrubber for common path, URL, DOI, and event-ID
+  shapes; excluded plan items that carry a user-authority domain; capped the
+  vendor model label; clamped token usage at zero; and enforced a total request
+  deadline in addition to the per-read socket timeout.
+- The transport now runs open, headers, body, and parse in a daemon worker
+  joined at the total deadline; at most four such workers may be in flight,
+  and a call returns `busy` when all four are held by abandoned connections.
+  Timeouts report `reason: timeout` rather than the generic transport code.
+- Added `offer_pending` so a second offer cannot invalidate a live unanswered
+  one, and made `status` ignore expired or superseded offers.
+- Excluded `epistemic_methods` from probe targets and from the middleware probe
+  path, and made candidate-input errors report `bad_candidates` rather than
+  `bad_config`.
+- Fixed duplicate or nested middleware re-entry of the same dispatch: the
+  re-entry now runs the inner action once instead of capturing the gateway block
+  as the probe observation. The in-flight identity is process-wide, so a wrapper
+  on another thread is also recognised; a re-entry whose arguments differ from
+  the commitment is blocked rather than executed. A later retry with the same
+  tool-call ID remains blocked while a probe is still executing.
+- Updated the privacy, security, README, and bundled inquiry guidance for the
+  optional outbound path.
+
 ## 1.2.0
 
 - Added portable activation and an explicitly registered `epistemic-inquiry`

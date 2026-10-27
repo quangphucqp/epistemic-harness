@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .harness import EpistemicHarness, HarnessError, current_native_capture_state
+from .jev import (
+    JevConfig,
+    JevConfigError,
+    api_key as jev_api_key,
+    load_config as load_jev_config,
+)
 from .locking import (
     DEFAULT_LIFECYCLE_LOCK_BUDGET_SECONDS,
     LockTimeoutError,
@@ -18,13 +24,22 @@ from .locking import (
     lock_deadline,
 )
 from .presentation import ResponseDetailError, project_response, validate_response_detail
-from .schemas import MODEL_OPERATIONS, MODEL_SCHEMA, PROBE_OPERATIONS, PROBE_SCHEMA
+from .schemas import (
+    METHOD_OPERATIONS,
+    METHODS_SCHEMA,
+    MODEL_OPERATIONS,
+    MODEL_SCHEMA,
+    PROBE_OPERATIONS,
+    PROBE_SCHEMA,
+)
 from .store import StoreError
 
 _HARNESSES: dict[Path, EpistemicHarness] = {}
 _HARNESS_LOCK = threading.Lock()
+_JEV_SETTINGS: dict[Path, JevConfig | None] = {}
+_JEV_SETTINGS_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
-_RUNTIME_GENERATION = "20260916-prospective-inquiry"
+_RUNTIME_GENERATION = "20261027-method-advice"
 _SKILL_PATH = Path(__file__).resolve().parents[1] / "skills" / "epistemic-inquiry" / "SKILL.md"
 _SKILL_DESCRIPTION = (
     "A bounded, session-scoped inquiry workflow: explicit activation, claim-bound "
@@ -49,6 +64,24 @@ def _get_harness() -> EpistemicHarness:
             harness = EpistemicHarness(root)
             _HARNESSES[root] = harness
         return harness
+
+
+def _jev_config() -> JevConfig | None:
+    root = _state_root().expanduser().resolve()
+    with _JEV_SETTINGS_LOCK:
+        return _JEV_SETTINGS.get(root)
+
+
+def _set_jev_config(config: JevConfig | None) -> None:
+    root = _state_root().expanduser().resolve()
+    with _JEV_SETTINGS_LOCK:
+        _JEV_SETTINGS[root] = config
+
+
+def _jev_available() -> bool:
+    """Hide the optional tool unless it is enabled and the vendor key exists."""
+    config = _jev_config()
+    return bool(config is not None and config.enabled and jev_api_key())
 
 
 def _adopt_compression_lineage(harness: EpistemicHarness, session_id: str) -> None:
@@ -106,6 +139,8 @@ def reset_for_tests() -> None:
     """Clear the profile-root harness cache; intentionally not registered as a tool."""
     with _HARNESS_LOCK:
         _HARNESSES.clear()
+    with _JEV_SETTINGS_LOCK:
+        _JEV_SETTINGS.clear()
 
 
 def epistemic_model_handler(args: dict[str, Any], **kwargs: Any) -> str:
@@ -152,6 +187,42 @@ def epistemic_probe_handler(args: dict[str, Any], **kwargs: Any) -> str:
             result,
             response_detail=response_detail,
             requested_case_id=args.get("case_id"),
+        )
+        return json.dumps(result, ensure_ascii=False, sort_keys=True)
+    except (HarnessError, StoreError, ValueError, TypeError) as exc:
+        return _error(str(exc))
+
+
+def epistemic_methods_handler(args: dict[str, Any], **kwargs: Any) -> str:
+    try:
+        _operation, _response_detail = _validate_tool_request(
+            args,
+            tool_name="epistemic_methods",
+            operations=METHOD_OPERATIONS,
+        )
+    except (TypeError, ValueError, ResponseDetailError) as exc:
+        return _error(str(exc))
+    session_id = str(kwargs.get("session_id") or "")
+    if not session_id:
+        return _error("epistemic_methods requires a Hermes session_id")
+    config = _jev_config()
+    if config is None:
+        return json.dumps(
+            {"available": False, "reason": "bad_config"},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    if not config.enabled:
+        return json.dumps(
+            {"available": False, "reason": "disabled"},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    try:
+        result = _session_harness(session_id).methods(
+            args,
+            session_id=session_id,
+            jev_config=config,
         )
         return json.dumps(result, ensure_ascii=False, sort_keys=True)
     except (HarnessError, StoreError, ValueError, TypeError) as exc:
@@ -681,6 +752,14 @@ def register(ctx: Any) -> None:
             _INJECTION_BUDGET["injection_max_chars"] = value
     except Exception:
         logger.warning("epistemic-harness config read failed; using injection defaults")
+    try:
+        _set_jev_config(load_jev_config(ctx.get_config("jev", {})))
+    except JevConfigError as exc:
+        _set_jev_config(None)
+        logger.warning("epistemic-harness Jev config rejected: %s", exc)
+    except Exception:
+        _set_jev_config(None)
+        logger.warning("epistemic-harness Jev config read failed; advice disabled")
     ctx.register_tool(
         name="epistemic_model",
         toolset="epistemic-harness",
@@ -706,6 +785,26 @@ def register(ctx: Any) -> None:
             "from observation disposition. Always supply the explicit operation."
         ),
         emoji="🔬",
+    )
+    try:
+        from tools.registry import no_cache_check_fn as _no_cache_check_fn
+    except Exception:  # pragma: no cover - older host without the helper
+        def _no_cache_check_fn(fn: Callable) -> Callable:
+            return fn
+
+    ctx.register_tool(
+        name="epistemic_methods",
+        toolset="epistemic-harness",
+        schema=METHODS_SCHEMA,
+        handler=epistemic_methods_handler,
+        description=(
+            "Optional advice on whether to continue a bounded inquiry and which "
+            "candidate investigation method to run next. Supply the candidates "
+            "yourself; the hosted judge ranks them. Disabled by default; advice "
+            "never grounds a claim, closes a case, or executes a method."
+        ),
+        check_fn=_no_cache_check_fn(_jev_available),
+        emoji="🧪",
     )
     ctx.register_skill(
         "epistemic-inquiry",

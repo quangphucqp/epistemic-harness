@@ -11,11 +11,14 @@ import logging
 import math
 import re
 import threading
+import uuid
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
+from . import jev
+from . import methods as method_events
 from .locking import LockTimeoutError, acquire_lock, lock_deadline
 from .store import CaseStore, ProbeExecutionBusyError, StoreError
 
@@ -144,6 +147,40 @@ _NATIVE_CAPTURE_STATE: ContextVar[_NativeCaptureState | None] = ContextVar(
     "epistemic_native_capture_state",
     default=None,
 )
+_DISPATCH_IN_FLIGHT: dict[str, int] = {}
+_DISPATCH_LOCK = threading.Lock()
+
+
+def _dispatch_key(session_id: str, tool_name: str, tool_call_id: str) -> str:
+    """Identify one in-flight dispatch; empty when the host supplies no call ID."""
+    if not tool_call_id:
+        return ""
+    return f"{session_id}\x1f{tool_name}\x1f{tool_call_id}"
+
+
+def _dispatch_enter(key: str) -> None:
+    if not key:
+        return
+    with _DISPATCH_LOCK:
+        _DISPATCH_IN_FLIGHT[key] = _DISPATCH_IN_FLIGHT.get(key, 0) + 1
+
+
+def _dispatch_exit(key: str) -> None:
+    if not key:
+        return
+    with _DISPATCH_LOCK:
+        count = _DISPATCH_IN_FLIGHT.get(key, 0) - 1
+        if count <= 0:
+            _DISPATCH_IN_FLIGHT.pop(key, None)
+        else:
+            _DISPATCH_IN_FLIGHT[key] = count
+
+
+def _dispatch_active(key: str) -> bool:
+    if not key:
+        return False
+    with _DISPATCH_LOCK:
+        return _DISPATCH_IN_FLIGHT.get(key, 0) > 0
 
 
 def current_native_capture_state() -> _NativeCaptureState | None:
@@ -513,6 +550,448 @@ class EpistemicHarness:
             raise HarnessError(str(exc)) from exc
         raise HarnessError("operation must be commit, compare, recover, or discard")
 
+    def methods(
+        self,
+        args: dict[str, Any],
+        *,
+        session_id: str,
+        jev_config: jev.JevConfig | None = None,
+        transport: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Optional hosted advice about continuing and which method to run next.
+
+        The advice is recorded in the Timeline and never grounds a claim. It
+        cannot open, revise, pause, or close a case, and it cannot execute a
+        method.
+        """
+        operation = str(args.get("operation") or "").strip().lower()
+        if operation not in {"offer", "choose", "status"}:
+            raise HarnessError("operation must be offer, choose, or status")
+        config = jev_config or jev.JevConfig()
+        try:
+            self.store.recover_prepared_compression(session_id)
+            if operation == "offer":
+                return self._offer_methods(
+                    args,
+                    session_id=session_id,
+                    config=config,
+                    transport=transport,
+                )
+            if operation == "choose":
+                return self._choose_method(args, session_id=session_id)
+            return self._methods_status(args, session_id=session_id, config=config)
+        except StoreError as exc:
+            raise HarnessError(str(exc)) from exc
+
+    def _offer_methods(
+        self,
+        args: dict[str, Any],
+        *,
+        session_id: str,
+        config: jev.JevConfig,
+        transport: Callable[[dict[str, Any]], dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        if not config.enabled:
+            return {"available": False, "reason": "disabled"}
+        if not jev.api_key():
+            return {"available": False, "reason": "no_key"}
+        case = self._require_active(session_id)
+        self._require_matching_case(args, case)
+        if case.get("pending_probe") is not None:
+            return {"available": False, "reason": "probe_pending"}
+        replay = self.replay(case["case_id"])
+        if not replay.get("usable"):
+            return {
+                "available": False,
+                "reason": "case_unusable",
+                "detail": str(replay.get("reason") or "")[:300],
+            }
+        case_id = str(case["case_id"])
+        events = self.store.list_events(case_id)
+        used = method_events.budget_used(events)
+        if (
+            used["attempts"] >= config.max_calls_per_case
+            or used["input_tokens"] >= config.max_input_tokens_per_case
+        ):
+            return {
+                "available": False,
+                "reason": "budget_exhausted",
+                "budget": {
+                    "attempts": used["attempts"],
+                    "max_attempts": config.max_calls_per_case,
+                    "input_tokens": used["input_tokens"],
+                    "max_input_tokens": config.max_input_tokens_per_case,
+                },
+            }
+        now = datetime.now(timezone.utc).timestamp()
+        current = method_events.valid_current_offer(events, now=now)
+        if current is not None:
+            return {
+                "available": False,
+                "reason": "offer_pending",
+                "offer_id": current.get("offer_id"),
+            }
+        if method_events.cooldown_active(
+            events,
+            now=now,
+            max_consecutive_failures=config.max_consecutive_failures,
+            cooldown_s=config.cooldown_s,
+        ):
+            _count, last_time = method_events.failure_state(events)
+            retry_after = max(
+                0, int(config.cooldown_s - (now - (last_time or now))) + 1
+            )
+            return {
+                "available": False,
+                "reason": "cooldown",
+                "retry_after_s": retry_after,
+            }
+        try:
+            candidates = jev.validate_candidates(
+                args.get("candidates"),
+                config,
+                candidates_json=args.get("candidates_json"),
+            )
+        except jev.JevConfigError as exc:
+            return {
+                "available": False,
+                "reason": exc.reason,
+                "detail": str(exc)[:300],
+            }
+        previous = method_events.previous_method_id(events)
+        round_number = method_events.round_number(events)
+        state, privacy = jev.build_state(
+            case,
+            events,
+            config,
+            round_number=round_number,
+            previous_method=previous,
+        )
+        request = jev.build_request(state, candidates, config)
+        privacy["request_chars"] = len(json.dumps(request, ensure_ascii=False))
+        offer_id = "offer-" + uuid.uuid4().hex[:12]
+        tip_event_id = str(events[-1].get("event_id") or "") if events else ""
+        started = self.store.transition_case(
+            case,
+            event_type=method_events.OFFER_STARTED,
+            event_payload={
+                "offer_id": offer_id,
+                "round": round_number,
+                "model_version": int(case.get("version", 0)),
+                "tip_event_id": tip_event_id,
+                "projection_sha256": jev.projection_digest(state),
+                "state_chars": privacy["sent_chars"],
+                "candidate_ids": [item["method_id"] for item in candidates],
+                "started_at": _utc_now(),
+            },
+        )
+        started_event_id = str(started["event"]["event_id"])
+        call_config = config
+
+        def _default_transport(payload: dict[str, Any]) -> dict[str, Any]:
+            return jev.call(payload, config=call_config)
+
+        try:
+            response = (transport or _default_transport)(request)
+            parsed = jev.parse_offer(
+                response,
+                offered_ids=[item["method_id"] for item in candidates],
+                config=config,
+            )
+        except jev.JevError as exc:
+            self._record_method_failure(
+                case_id=case_id,
+                offer_id=offer_id,
+                round_number=round_number,
+                reason=exc.reason,
+                detail=str(exc),
+            )
+            return {
+                "available": False,
+                "reason": exc.reason,
+                "detail": str(exc)[:300],
+            }
+        except Exception as exc:
+            # The optional advice path must never break the host turn.
+            self._record_method_failure(
+                case_id=case_id,
+                offer_id=offer_id,
+                round_number=round_number,
+                reason="transport_error",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+            return {
+                "available": False,
+                "reason": "transport_error",
+                "detail": str(exc)[:300],
+            }
+        try:
+            return self._commit_offer(
+                session_id=session_id,
+                case_id=case_id,
+                offer_id=offer_id,
+                round_number=round_number,
+                started_event_id=started_event_id,
+                tip_event_id=tip_event_id,
+                parsed=parsed,
+                privacy=privacy,
+                candidates=candidates,
+                config=config,
+            )
+        except Exception as exc:
+            # A CAS loss or a write failure after the call must still leave a
+            # terminal failure event rather than a dangling STARTED record.
+            self._record_method_failure(
+                case_id=case_id,
+                offer_id=offer_id,
+                round_number=round_number,
+                reason="state_write_failed",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+            return {
+                "available": False,
+                "reason": "state_write_failed",
+                "detail": str(exc)[:300],
+            }
+
+    def _commit_offer(
+        self,
+        *,
+        session_id: str,
+        case_id: str,
+        offer_id: str,
+        round_number: int,
+        started_event_id: str,
+        tip_event_id: str,
+        parsed: dict[str, Any],
+        privacy: dict[str, Any],
+        candidates: list[dict[str, str]],
+        config: jev.JevConfig,
+    ) -> dict[str, Any]:
+        fresh = self.store.get_active_case(session_id)
+        if fresh is None or str(fresh.get("case_id") or "") != case_id:
+            self._record_method_failure(
+                case_id=case_id,
+                offer_id=offer_id,
+                round_number=round_number,
+                reason="state_changed_during_call",
+                detail="the active case changed while the advice call was in flight",
+            )
+            return {"available": False, "reason": "state_changed_during_call"}
+        fresh_events = self.store.list_events(case_id)
+        current_tip = str(fresh_events[-1].get("event_id") or "") if fresh_events else ""
+        if current_tip != started_event_id:
+            self._record_method_failure(
+                case_id=case_id,
+                offer_id=offer_id,
+                round_number=round_number,
+                reason="state_changed_during_call",
+                detail="new case events landed while the advice call was in flight",
+            )
+            return {"available": False, "reason": "state_changed_during_call"}
+        expires_at = datetime.fromtimestamp(
+            datetime.now(timezone.utc).timestamp() + config.offer_ttl_s,
+            tz=timezone.utc,
+        ).isoformat()
+        offered = self.store.transition_case(
+            fresh,
+            event_type=method_events.OFFERED,
+            event_payload={
+                "offer_id": offer_id,
+                "round": round_number,
+                "started_event_id": started_event_id,
+                "tip_event_id": tip_event_id,
+                "recommended_method_id": parsed["recommended_method_id"],
+                "ranking": parsed["ranking"],
+                "continue_probability": parsed["continue_probability"],
+                "confidence": parsed["confidence"],
+                "model": parsed["model"],
+                "usage": parsed["usage"],
+                "expires_at": expires_at,
+                "privacy": privacy,
+                "candidates": candidates,
+                "offered_at": _utc_now(),
+            },
+        )
+        by_id = {item["method_id"]: item["text"] for item in candidates}
+        return {
+            "available": True,
+            "offer_id": offer_id,
+            "case_id": case_id,
+            "round": round_number,
+            "recommended_method_id": parsed["recommended_method_id"],
+            "recommended_method_text": by_id.get(parsed["recommended_method_id"], ""),
+            "ranking": [
+                {**item, "text": by_id.get(item["method_id"], "")}
+                for item in parsed["ranking"]
+            ],
+            "continue_probability": parsed["continue_probability"],
+            "confidence": parsed["confidence"],
+            "model": parsed["model"],
+            "usage": parsed["usage"],
+            "expires_at": expires_at,
+            "privacy": privacy,
+            "offer_event_id": str(offered["event"]["event_id"]),
+            "advisory": (
+                "Jev ranks the supplied candidate methods and estimates whether "
+                "another round would change the decision. It does not generate "
+                "methods, execute them, ground a claim, or close a case."
+            ),
+        }
+
+    def _require_matching_case(
+        self, args: dict[str, Any], case: dict[str, Any]
+    ) -> None:
+        requested = str(args.get("case_id") or "").strip()
+        if requested and requested != str(case.get("case_id") or ""):
+            raise HarnessError(
+                "case_id does not match the active case for this session"
+            )
+
+    def _record_method_failure(
+        self,
+        *,
+        case_id: str,
+        offer_id: str,
+        round_number: int,
+        reason: str,
+        detail: str,
+    ) -> None:
+        """Best-effort failure record; never replace the turn's result."""
+        try:
+            case = self.store.get_case(case_id)
+            if case.get("status") not in {"active", "paused", "closed"}:
+                return
+            self.store.transition_case(
+                case,
+                event_type=method_events.OFFER_FAILED,
+                event_payload={
+                    "offer_id": offer_id,
+                    "round": round_number,
+                    "reason": _redact(reason)[:80],
+                    "detail": _redact(detail)[:300],
+                    "failed_at": _utc_now(),
+                },
+            )
+        except Exception:
+            logger.warning(
+                "epistemic method-advice failure could not be recorded", exc_info=True
+            )
+
+    def _choose_method(
+        self, args: dict[str, Any], *, session_id: str
+    ) -> dict[str, Any]:
+        case = self._require_active(session_id)
+        self._require_matching_case(args, case)
+        case_id = str(case["case_id"])
+        events = self.store.list_events(case_id)
+        requested = str(args.get("offer_id") or "").strip()
+        if requested:
+            offer = method_events.offer_by_id(events, requested)
+        else:
+            offer = method_events.current_offer(events)
+        if offer is None:
+            return {"recorded": False, "reason": "no_current_offer"}
+        current = method_events.current_offer(events)
+        if current is None or current.get("offer_id") != offer.get("offer_id"):
+            return {"recorded": False, "reason": "offer_already_answered"}
+        current_tip = str(events[-1].get("event_id") or "") if events else ""
+        if current_tip != str(offer.get("event_id") or ""):
+            return {
+                "recorded": False,
+                "reason": "stale_offer",
+                "detail": "new case events landed after the offer; request a new offer",
+            }
+        expires = method_events.parse_time(offer.get("expires_at"))
+        if expires is None or datetime.now(timezone.utc).timestamp() > expires:
+            return {"recorded": False, "reason": "expired_offer"}
+        previous = method_events.previous_method_id(events)
+        try:
+            validated = method_events.validate_disposition(
+                args, offer=offer, previous_method=previous
+            )
+        except method_events.MethodError as exc:
+            return {
+                "recorded": False,
+                "reason": exc.reason,
+                "detail": str(exc)[:300],
+            }
+        recommended = str(offer.get("recommended_method_id") or "")
+        followed = bool(validated["method_id"]) and validated["method_id"] == recommended
+        chosen = self.store.transition_case(
+            case,
+            event_type=method_events.CHOSEN,
+            event_payload={
+                "offer_id": offer["offer_id"],
+                "disposition": validated["disposition"],
+                "method_id": validated["method_id"],
+                "followed_recommendation": followed,
+                "note": _redact(validated["note"]),
+                "chosen_at": _utc_now(),
+            },
+        )
+        return {
+            "recorded": True,
+            "case_id": case_id,
+            "offer_id": offer["offer_id"],
+            "disposition": validated["disposition"],
+            "method_id": validated["method_id"],
+            "followed_recommendation": followed,
+            "event_id": str(chosen["event"]["event_id"]),
+        }
+
+    def _methods_status(
+        self, args: dict[str, Any], *, session_id: str, config: jev.JevConfig
+    ) -> dict[str, Any]:
+        case = self.store.get_active_case(session_id)
+        if case is None:
+            return {
+                "enabled": config.enabled,
+                "key_present": bool(jev.api_key()),
+                "case": None,
+            }
+        self._require_matching_case(args, case)
+        events = self.store.list_events(str(case["case_id"]))
+        used = method_events.budget_used(events)
+        offer = method_events.valid_current_offer(
+            events, now=datetime.now(timezone.utc).timestamp()
+        )
+        chosen = method_events.last_chosen(events)
+        return {
+            "enabled": config.enabled,
+            "key_present": bool(jev.api_key()),
+            "case_id": case["case_id"],
+            "budget": {
+                "attempts": used["attempts"],
+                "remaining_attempts": max(
+                    0, config.max_calls_per_case - used["attempts"]
+                ),
+                "input_tokens": used["input_tokens"],
+                "remaining_input_tokens": max(
+                    0, config.max_input_tokens_per_case - used["input_tokens"]
+                ),
+            },
+            "current_offer": (
+                {
+                    "offer_id": offer.get("offer_id"),
+                    "round": offer.get("round"),
+                    "recommended_method_id": offer.get("recommended_method_id"),
+                    "continue_probability": offer.get("continue_probability"),
+                    "expires_at": offer.get("expires_at"),
+                }
+                if offer
+                else None
+            ),
+            "last_disposition": (
+                {
+                    "disposition": chosen.get("disposition"),
+                    "method_id": chosen.get("method_id"),
+                }
+                if chosen
+                else None
+            ),
+        }
+
     def tool_execution_middleware(
         self,
         *,
@@ -524,7 +1003,7 @@ class EpistemicHarness:
         **_metadata: Any,
     ) -> Any:
         """Capture an explicitly committed probe without taxing ordinary tool use."""
-        if tool_name in {"epistemic_model", "epistemic_probe"}:
+        if tool_name in {"epistemic_model", "epistemic_probe", "epistemic_methods"}:
             return next_call(args)
 
         if not session_id:
@@ -543,6 +1022,34 @@ class EpistemicHarness:
                     f"Timeline integrity failure: {replay['timeline'].get('error', 'unknown error')}"
                 )
             probe = case.get("pending_probe")
+            incoming_tool_call_id = str(_metadata.get("tool_call_id") or "")
+            incoming_dispatch_key = _dispatch_key(
+                session_id, tool_name, incoming_tool_call_id
+            )
+            same_dispatch = (
+                bool(incoming_dispatch_key)
+                and isinstance(probe, dict)
+                and str(probe.get("execution_tool_call_id") or "")
+                == incoming_tool_call_id
+                and _dispatch_active(incoming_dispatch_key)
+            )
+            if (
+                isinstance(probe, dict)
+                and probe.get("status") == "executing"
+                and probe.get("tool_name") == tool_name
+                and same_dispatch
+            ):
+                # A duplicate or nested wrapper re-enters the same dispatch.
+                # Let the inner frame run the action once; the outer frame is
+                # the one that captures the result. Treating this re-entry as a
+                # competing call would capture the gateway block itself as the
+                # observation. A wrapper that rewrites the arguments must not
+                # run a different action under the committed probe.
+                if not _probe_args_match(self.store, probe, args):
+                    return _blocked(
+                        "nested re-entry arguments do not match the committed probe"
+                    )
+                return next_call(args)
             if (
                 isinstance(probe, dict)
                 and probe.get("status") == "executing"
@@ -681,6 +1188,10 @@ class EpistemicHarness:
                         tool_name=tool_name,
                     )
                     native_token = _NATIVE_CAPTURE_STATE.set(native_state)
+                dispatch_key = _dispatch_key(
+                    session_id, tool_name, execution_tool_call_id
+                )
+                _dispatch_enter(dispatch_key)
                 try:
                     result = next_call(args)
                 except Exception as exc:
@@ -709,6 +1220,8 @@ class EpistemicHarness:
                                 "native epistemic observation fallback failed", exc_info=True
                             )
                     raise
+                finally:
+                    _dispatch_exit(dispatch_key)
                 if native_state is not None:
                     if native_state.raw_captured:
                         try:
@@ -1728,7 +2241,7 @@ class EpistemicHarness:
         if missing:
             raise HarnessError(f"missing probe fields: {', '.join(missing)}")
         tool_name = str(args["tool_name"]).strip()
-        if tool_name in {"epistemic_model", "epistemic_probe"}:
+        if tool_name in {"epistemic_model", "epistemic_probe", "epistemic_methods"}:
             raise HarnessError("a probe must bind one external action or formal question")
         if tool_name == "delegate_task":
             raise HarnessError(

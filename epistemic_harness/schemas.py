@@ -1,5 +1,5 @@
 # AI-assisted contribution; maintained by Epistemic Harness contributors.
-"""JSON schemas for the two epistemic-harness tools."""
+"""JSON schemas for the three epistemic-harness tools."""
 
 # Shared model-facing constants keep both tool schemas aligned.
 #
@@ -17,6 +17,7 @@ MODEL_OPERATIONS = [
     "close",
 ]
 PROBE_OPERATIONS = ["commit", "compare", "recover", "discard"]
+METHOD_OPERATIONS = ["offer", "choose", "status"]
 RESPONSE_DETAIL_SCHEMA = {
     "type": "string",
     "enum": ["full", "compact"],
@@ -420,6 +421,92 @@ PROBE_SCHEMA = {
                     "when access_scope is snippet, abstract, or partial."
                 ),
                 "properties": EVIDENCE_DESCRIPTOR_PROPERTIES,
+            },
+        },
+        "required": ["operation"],
+    },
+}
+
+METHODS_SCHEMA = {
+    "name": "epistemic_methods",
+    "description": (
+        "Optional advice on whether to continue a bounded inquiry and which candidate "
+        "investigation method to run next. Supply the candidate methods yourself; the "
+        "hosted judge ranks them and estimates whether another round would change the "
+        "decision. Disabled by default. The advice is recorded in the Timeline and never "
+        "grounds a claim, closes a case, or executes a method. Use offer to request an "
+        "offer, choose to record continue_same, continue_different, or stop, and status "
+        "to inspect the per-case budget without a network call."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": METHOD_OPERATIONS,
+                "description": (
+                    "Required on every call. Choose one explicit operation; never infer "
+                    "it from the other fields. Example: {\"operation\":\"status\"}."
+                ),
+            },
+            "case_id": {
+                "type": "string",
+                "description": "Optional case ID; the active case is used when omitted.",
+            },
+            "offer_id": {
+                "type": "string",
+                "description": (
+                    "For choose: the offer being answered. Omit to answer the current "
+                    "unanswered offer."
+                ),
+            },
+            "candidates": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 6,
+                "description": (
+                    "The candidate investigation methods for this case. Each method_id "
+                    "is an opaque key used in the response; text describes the method in "
+                    "at most 240 characters. The plugin does not ship a fixed method list."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "method_id": {
+                            "type": "string",
+                            "description": "Lowercase letters, digits, hyphen, or underscore.",
+                        },
+                        "text": {"type": "string"},
+                    },
+                    "required": ["method_id", "text"],
+                },
+            },
+            "candidates_json": {
+                "type": "string",
+                "description": (
+                    "Provider-safe JSON string containing the candidates array. Use this "
+                    "route when nested candidate objects do not survive transport."
+                ),
+            },
+            "disposition": {
+                "type": "string",
+                "enum": ["continue_same", "continue_different", "stop"],
+                "description": (
+                    "For choose: continue with the previously chosen method, continue "
+                    "with a named different method, or stop selecting methods. Stop is a "
+                    "recorded disposition, not case closure."
+                ),
+            },
+            "method_id": {
+                "type": "string",
+                "description": (
+                    "For continue_different: the chosen method, which must be one of the "
+                    "offered candidates and must differ from the previous method."
+                ),
+            },
+            "note": {
+                "type": "string",
+                "description": "Optional short reason for the disposition.",
             },
         },
         "required": ["operation"],

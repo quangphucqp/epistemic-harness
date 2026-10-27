@@ -248,11 +248,33 @@ The full readback is the authoritative model-facing receipt. Durable case state,
 Timeline events, captured tool results, and replay validation remain unchanged
 by response detail.
 
+## Optional method advice
+
+`epistemic_methods` is off by default. When enabled, it asks a hosted judge to
+rank two to six candidate investigation methods that you supply, and to
+estimate whether another round would change the decision. The plugin does not
+ship a fixed method list; propose the methods that fit this case.
+
+Use it at a real choice point, not on every turn:
+
+1. `offer` with `candidates` (or `candidates_json`). Read the ranking and
+   `continue_probability`.
+2. Decide for yourself. Record the decision with `choose`:
+   - `continue_same` keeps the previously chosen method;
+   - `continue_different` names a different offered method;
+   - `stop` records that no further method selection is needed.
+3. `status` checks the per-case budget without a network call.
+
+The advice is a judgment, not evidence. It cannot ground a claim, and it does
+not close the case. An offer expires and is invalidated by any later case event.
+
 ## Scope and privacy
 
 State is local and profile-scoped. The plugin can redact captured tool results,
 but captured source and tool content may still be sensitive. Do not copy case
 logs into a report or export them automatically. The plugin has no telemetry,
-network request, self-updater, or credential-store access.
+self-updater, or credential-store access. The optional method-advice tool is the
+only network path; it is disabled unless explicitly enabled and sends only the
+bounded projection described in `PRIVACY.md`.
 
 AI-assisted contribution; maintained by project contributors.

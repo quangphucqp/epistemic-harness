@@ -1,8 +1,35 @@
 # Privacy notes
 
-Epistemic Harness is local-only. It writes profile-scoped case state under
-`$HERMES_HOME/epistemic-harness/` and does not transmit it, index it in a
-remote service, or export it automatically.
+Epistemic Harness is local-only by default. It writes profile-scoped case state
+under `$HERMES_HOME/epistemic-harness/`, does not transmit that state, does not
+index it in a remote service, and does not export it automatically.
+
+The optional `epistemic_methods` tool is the single exception, and it is disabled
+by default. When explicitly enabled, an `offer` request sends one bounded,
+redacted projection of the active case to the configured HTTPS endpoint (TypeSafe
+by default). The projection contains the top unknown, decision, stopping
+condition, the offer round number, a small number of claim and plan texts, short
+recent event types, the previous method, and the candidate methods supplied by
+the caller. It excludes
+case and session IDs, evidence references and locators, probe arguments or
+results, prior lessons, closure text, and artifact paths by the structured
+allowlist. Free-text values pass through credential redaction and a best-effort
+path, URL, DOI, and event-ID scrubber; a location described in prose can still
+survive the pattern filter. Claims and plan items in the user-authority domains
+are omitted unless `allow_user_domain_state` is set.
+
+The vendor key is resolved through Hermes's profile secret scope, with a process
+environment fallback for standalone use. The plugin does not read `.env` or a
+credential store directly, and a multiplexed host with no active profile scope
+fails closed. The endpoint must use HTTPS, redirects are refused, and the
+response is capped at 256 KB.
+
+The request and response are not retained by the plugin beyond the local Timeline
+event that records the offer: the candidate methods, the recommended method, the
+ranking, `confidence`, `continue_probability`, the short model label, token usage,
+the privacy receipt, and the expiry time. The vendor's own retention
+and logging are governed by the vendor's policy; the plugin cannot guarantee
+deletion at the vendor.
 
 Stored material can include:
 
@@ -16,7 +43,9 @@ Stored material can include:
 Captured source and tool results may remain sensitive despite redaction. Keep
 `$HERMES_HOME` access-controlled and avoid putting secrets in case text or tool
 arguments. The plugin does not read a credential store and does not add
-telemetry or a self-update path.
+telemetry or a self-update path. The optional method-advice client is the only
+outbound network path; it is inactive unless `settings.jev.enabled` is true and
+`TYPESAFE_API_KEY` is present.
 
 Compact responses affect only the returned presentation. They do not delete,
 truncate, or rewrite the durable case, Timeline, artifacts, or replay data. Use

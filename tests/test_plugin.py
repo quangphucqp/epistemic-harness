@@ -66,7 +66,7 @@ def _open_payload(case_id: str = "plugin-case") -> dict:
 
 def test_manifest_uses_only_native_hermes_hooks():
     manifest = yaml.safe_load((Path(__file__).parents[1] / "plugin.yaml").read_text())
-    assert manifest["version"] == "1.2.0"
+    assert manifest["version"] == "1.3.0"
     assert manifest["kind"] == "standalone"
     assert manifest["provides_hooks"] == [
         "pre_llm_call",
@@ -91,7 +91,7 @@ def test_model_schema_keeps_portfolio_and_evidence_quality_fields():
     ]
 
 
-def test_plugin_registers_two_tools_five_native_hooks_and_fail_open_middleware(
+def test_plugin_registers_three_tools_five_native_hooks_and_fail_open_middleware(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -99,7 +99,11 @@ def test_plugin_registers_two_tools_five_native_hooks_and_fail_open_middleware(
     context = RecordingContext()
     plugin.register(context)
 
-    assert set(context.tools) == {"epistemic_model", "epistemic_probe"}
+    assert set(context.tools) == {
+        "epistemic_model",
+        "epistemic_probe",
+        "epistemic_methods",
+    }
     assert set(context.hooks) == {
         "pre_llm_call",
         "post_tool_call",
@@ -226,6 +230,6 @@ def test_runtime_diagnostic_and_registration_log_share_release_generation(
             )
         )
 
-    generation = "20260916-prospective-inquiry"
+    generation = "20261027-method-advice"
     assert diagnostic["runtime"]["generation"] == generation
     assert any(f"generation={generation}" in record.message for record in caplog.records)

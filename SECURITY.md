@@ -7,8 +7,43 @@ uses POSIX `fcntl` locks for cross-process case and probe coordination. It does
 not provide Windows support and refuses to start where those locks are
 unavailable rather than weakening the concurrency contract.
 
-The plugin has no network client, telemetry, automatic data export,
-self-updater, or credential-store access. It does not modify Hermes core.
+The default plugin surface has no network client, telemetry, automatic data
+export, self-updater, or credential-store access. The optional
+`epistemic_methods` tool adds one outbound HTTPS client for method advice; it is
+disabled by default and hidden unless `settings.jev.enabled` is true and
+`TYPESAFE_API_KEY` resolves through the profile secret scope. It does not modify
+Hermes core.
+
+## Optional outbound advice
+
+When enabled, `epistemic_methods` sends one POST per `offer` to the configured
+HTTPS endpoint. The endpoint is validated as HTTPS at config load and again at
+the network boundary, redirects are refused, the call returns at a hard total
+deadline regardless of header or body drip (an abandoned transport worker may
+keep reading until its socket closes), and the response is capped at
+256 KB. At most four transport workers may be in flight; a call returns
+`busy` rather than starting another worker when all four are held by
+abandoned connections. A timed-out call can still send its one request if the
+transport was already blocked inside DNS or connect; the deadline bounds the
+caller, not that abandoned send. An abandoned worker retains its request object,
+including the bearer header, until it exits; the four-worker cap bounds how many
+can be retained. The client never logs the vendor key, request headers, or an HTTP error
+body. A transport, HTTP, malformed-response, or state-change failure is recorded
+locally as `method_offer_failed` with a short reason and does not block the host
+turn.
+
+The projection is an allowlist, not a sample of the case. It excludes case and
+session identifiers, evidence references and locators, probe arguments and
+results, prior lessons, closure text, and artifact paths by the structured
+allowlist. Free-text values also pass a best-effort path, URL, DOI, and event-ID
+scrubber; a location described in prose can still survive the pattern filter.
+Treat the endpoint and its operator as a disclosure recipient even when the
+projection is small.
+
+Candidate method text is supplied by the caller and is treated as data by the
+judge. Do not pass unreviewed third-party text as a candidate: a candidate can
+bias the ranking even though the returned choice is validated against the offered
+IDs.
 
 ## Local state and sensitive material
 

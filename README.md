@@ -42,14 +42,78 @@ belief change) → revise or non-update → close/readback.
 
 ## Installed surfaces
 
-Two model-facing tools:
+Three model-facing tools:
 
 - `epistemic_model`: `open`, `list`, `show`, `record_evidence`, `revise`, `pause`, `resume`, `close`
 - `epistemic_probe`: `commit`, `compare`, `recover`, `discard`
+- `epistemic_methods`: `offer`, `choose`, `status` (optional; hidden unless the Jev advice setting is enabled)
+
+## Optional Jev method advice
+
+`epistemic_methods` is disabled by default and hidden when disabled. It asks a
+hosted TypeSafe/Jev judge to rank a caller-supplied list of investigation methods
+and to estimate whether another round would change the decision. It does not
+generate methods: the agent, or any other proposer, supplies two to six
+candidates for the current case, and the judge ranks them.
+
+Enable it under `plugins.entries.epistemic-harness.settings.jev`:
+
+```yaml
+plugins:
+  entries:
+    epistemic-harness:
+      settings:
+        jev:
+          enabled: true
+          model: jev-latest
+          max_calls_per_case: 4
+```
+
+`TYPESAFE_API_KEY` must be available through Hermes's profile secret scope. The
+plugin does not read `.env` or a credential store directly. Standalone use falls
+back to the process environment, and a multiplexed host with no active profile
+scope fails closed. The setting is read at plugin registration, so restart the
+gateway after changing it.
+
+The three operations:
+
+- `offer` sends a bounded projection and returns `offer_id`, a ranking, a
+  recommended method, `continue_probability`, `confidence`, and an expiry time.
+- `choose` records `continue_same`, `continue_different` (with `method_id`), or
+  `stop`. It derives `followed_recommendation`. It cannot close, pause, stale, or
+  execute anything.
+- `status` reports the per-case budget and current offer without a network call.
+
+Every `offer` is written to the Timeline as `method_offer_started` and
+`method_offered`; failures are `method_offer_failed`. Any later case event
+invalidates the offer. `offer` refuses to start a second offer while an
+unanswered, unexpired offer is still the Timeline tip; answer it or let it
+expire. Per-case defaults are four attempts, 30,000 input tokens, 6,000 projected
+characters, and a 30-minute offer lifetime. Three consecutive failures trigger a
+ten-minute cooldown.
+
+What is sent: the top unknown, decision, stopping condition, the offer round
+number, up to five alternatives, six grounding claims, four mechanisms, five plan
+actions, three recent event types, the previous method, and the candidate
+methods. Case and
+session IDs, evidence references and locators, probe arguments and results,
+prior lessons, closure text, and artifact paths are excluded by the structured
+allowlist. Free-text values also pass through credential redaction and a
+best-effort path, URL, DOI, and event-ID scrubber; free text can still describe a
+location without matching a pattern, so the scrubber is not a guarantee. Claims
+and plan items in the user-authority domains are omitted unless
+`allow_user_domain_state` is true. The `privacy` receipt reports `sent_chars` for
+the included values,
+`request_chars` for the full serialized request, `truncated`, and
+`user_domain_omitted`. The endpoint must be `https`, redirects are refused, and
+the response is capped at 256 KB.
+
+Advice is a model judgment, not source evidence. It cannot ground a claim, and
+it does not enter closure calibration.
 
 ## Distribution
 
-Release 1.2.0 is a standalone MIT plugin for Hermes Agent 0.21 and later
+Release 1.3.0 is a standalone MIT plugin for Hermes Agent 0.21 and later
 within the declared `<1.0` compatibility range. Supported platforms are Linux
 and macOS; POSIX `fcntl` locking is required. The plugin declares no additional
 runtime Python dependencies. Validate an unpacked tree with:
@@ -304,3 +368,5 @@ The plugin is optional, so capture failure after an external mutation cannot rol
 The Timeline hash chain is tamper-evident, not cryptographically authenticated: a local actor with write access to the complete profile could rewrite both state and hashes. Likewise, authority compatibility and closure calibration are structural contracts, not semantic fact-checking of claim prose. Selective lesson retrieval is deliberately small and lexical; it can miss a conceptually related lesson that uses different language.
 
 This implementation requires POSIX `fcntl` locks. It refuses to start on platforms without them rather than silently weakening cross-process resume and execution-lease guarantees. Replay is integrity-safe but not a linearizable multi-file read snapshot; a concurrent transition can make one diagnostic replay internally older/newer than another, while all writes remain CAS-checked and serialized.
+
+The optional method-advice tool adds one outbound HTTPS request when explicitly enabled. Its ranking reflects the candidates it was given; a method omitted from the candidate list cannot be recommended. The judge is not calibrated against research outcomes, and the recorded advice does not establish that a method improved a decision. Vendor availability, latency, and retention are outside the plugin's control. Free-text locator scrubbing is best-effort, and a redelivery of an already completed dispatch with the same tool-call ID is not deduplicated by this plugin.
