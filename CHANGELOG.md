@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.3
+
+- `epistemic_model(show)` and `epistemic_model(resume)` now return a bounded
+  `brief` derived from the existing Timeline. It exposes the last pause
+  reason, last revision reason and changed fields, last evidence summary, last
+  observation status, pending-probe identity, and event counts. Dedicated probe
+  argument and result fields, source locators, and artifact paths are not
+  copied. Free-text reasons and summaries are redacted but may quote a location.
+- The brief is read-only and is not evidence. It adds no model field, no
+  Timeline event, no context injection, and no Jev projection. It makes the
+  pause or handoff reason visible after `resume`, where it was previously
+  discarded.
+
 ## 1.4.2
 
 - Count only completed attempts against the per-case budget. An attempt that

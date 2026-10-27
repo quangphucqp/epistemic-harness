@@ -38,7 +38,7 @@ _HARNESS_LOCK = threading.Lock()
 _JEV_SETTINGS: dict[Path, JevConfig | None] = {}
 _JEV_SETTINGS_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
-_RUNTIME_GENERATION = "20261027-mandatory-consultation"
+_RUNTIME_GENERATION = "20261027-derived-case-brief"
 _SKILL_PATH = Path(__file__).resolve().parents[1] / "skills" / "epistemic-inquiry" / "SKILL.md"
 _SKILL_DESCRIPTION = (
     "A bounded, session-scoped inquiry workflow: explicit activation, claim-bound "

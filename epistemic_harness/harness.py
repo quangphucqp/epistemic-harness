@@ -242,7 +242,11 @@ class EpistemicHarness:
                         raise HarnessError(
                             "only paused or closed cases can be inspected across an active case"
                         )
-                return {"case": case, "replay": self.replay(case["case_id"])}
+                return {
+                    "case": case,
+                    "replay": self.replay(case["case_id"]),
+                    "brief": self._case_brief(case),
+                }
             if operation == "record_evidence":
                 return self._record_evidence(args, session_id=session_id)
             if operation == "revise":
@@ -2681,7 +2685,133 @@ class EpistemicHarness:
             session_id=session_id,
         )
         transition["replay"] = self.replay(case_id)
+        transition["brief"] = self._case_brief(transition["case"])
         return transition
+
+    def _case_brief(self, case: dict[str, Any]) -> dict[str, Any]:
+        """Return a bounded, derived view of the case's operational history.
+
+        The brief is read-only and is not evidence. It exposes only the last
+        pause reason, revision reason, evidence summary, observation status,
+        pending-probe identity, and counts. Dedicated probe-argument and
+        result fields, source locators, and artifact paths are not copied.
+        Free-text reasons and summaries are redacted but may quote a location.
+        """
+        case_id = str(case.get("case_id") or "")
+        try:
+            events = self.store.list_events(case_id)
+        except StoreError:
+            return {
+                "last_pause": None,
+                "last_revision": None,
+                "last_evidence": None,
+                "last_observation": None,
+                "pending_probe": None,
+                "counts": {
+                    "events": 0,
+                    "probes": 0,
+                    "observations": 0,
+                    "evidence": 0,
+                    "revisions": 0,
+                },
+                "error": "case timeline is unavailable",
+            }
+
+        def event_at(event: dict[str, Any]) -> str:
+            return str(event.get("timestamp") or "")
+
+        pauses = [event for event in events if event.get("type") == "case_paused"]
+        revisions = [event for event in events if event.get("type") == "model_revised"]
+        evidence_events = [
+            event
+            for event in events
+            if event.get("type") in {"initial_observation", "evidence_recorded"}
+        ]
+        observations = [
+            event
+            for event in events
+            if event.get("type") in {"probe_observed", "probe_exposed"}
+        ]
+        events_by_id = {
+            str(event.get("event_id") or ""): event
+            for event in events
+            if isinstance(event, dict) and event.get("event_id")
+        }
+
+        last_pause = None
+        if pauses:
+            payload = pauses[-1].get("payload") or {}
+            last_pause = {
+                "at": event_at(pauses[-1]),
+                "reason": _bounded_text(payload.get("reason")),
+            }
+
+        last_revision = None
+        if revisions:
+            payload = revisions[-1].get("payload") or {}
+            changed = payload.get("changed_fields")
+            if not isinstance(changed, list):
+                changed = []
+            last_revision = {
+                "at": event_at(revisions[-1]),
+                "reason": _bounded_text(payload.get("reason")),
+                "changed_fields": [
+                    _bounded_text(field, limit=80) for field in changed[:8]
+                ],
+                "changed_fields_truncated": len(changed) > 8,
+            }
+
+        last_evidence = None
+        if evidence_events:
+            payload = evidence_events[-1].get("payload") or {}
+            last_evidence = {
+                "at": event_at(evidence_events[-1]),
+                "summary": _bounded_text(payload.get("summary")),
+                "authority_domain": _bounded_text(
+                    payload.get("authority_domain"), limit=40
+                ),
+            }
+
+        last_observation = None
+        if observations:
+            payload = observations[-1].get("payload") or {}
+            probe_id = str(payload.get("probe_id") or "").strip()
+            last_observation = {
+                "at": event_at(observations[-1]),
+                "probe_id": _bounded_text(probe_id, limit=40),
+                "tool_name": _bounded_text(payload.get("tool_name"), limit=80),
+                "status": _resolve_observation_result_status(
+                    str(observations[-1].get("event_id") or ""),
+                    events_by_id,
+                    expected_probe_id=probe_id or None,
+                ),
+            }
+
+        pending = case.get("pending_probe")
+        pending_brief = None
+        if isinstance(pending, dict):
+            pending_brief = {
+                "probe_id": _bounded_text(pending.get("probe_id"), limit=40),
+                "tool_name": _bounded_text(pending.get("tool_name"), limit=80),
+                "status": _bounded_text(pending.get("status"), limit=40),
+            }
+
+        return {
+            "last_pause": last_pause,
+            "last_revision": last_revision,
+            "last_evidence": last_evidence,
+            "last_observation": last_observation,
+            "pending_probe": pending_brief,
+            "counts": {
+                "events": len(events),
+                "probes": sum(
+                    1 for event in events if event.get("type") == "probe_committed"
+                ),
+                "observations": len(observations),
+                "evidence": len(evidence_events),
+                "revisions": len(revisions),
+            },
+        }
 
     def _close(
         self,
@@ -4045,6 +4175,14 @@ def _redact(text: str) -> str:
         return redact_sensitive_text(text, force=True)
     except ImportError:
         return text
+
+
+def _bounded_text(value: Any, *, limit: int = 300) -> str:
+    """Redact and cap a derived display string without changing stored data."""
+    text = _redact(str(value or "").strip())
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
 
 
 def _utc_now() -> str:

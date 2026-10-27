@@ -48,6 +48,14 @@ Three model-facing tools:
 - `epistemic_probe`: `commit`, `compare`, `recover`, `discard`
 - `epistemic_methods`: `offer`, `choose`, `status` (optional; visible when the Jev setting is enabled)
 
+`epistemic_model(show)` and `epistemic_model(resume)` also return a derived,
+bounded `brief` built from the existing Timeline. It shows the last pause
+reason, last revision reason and changed fields, last evidence summary, last
+observation status, pending-probe identity, and event counts. It is a read-only
+display aid, not evidence. Dedicated probe-argument and result fields, source
+locators, and artifact paths are not copied. Free-text reasons and summaries
+are redacted but may quote a location.
+
 ## Jev consultation
 
 `epistemic_methods` is disabled by default and hidden when disabled. When
@@ -160,7 +168,7 @@ it does not enter closure calibration.
 
 ## Distribution
 
-Release 1.4.2 is a standalone MIT plugin for Hermes Agent 0.21 and later
+Release 1.4.3 is a standalone MIT plugin for Hermes Agent 0.21 and later
 within the declared `<1.0` compatibility range. Supported platforms are Linux
 and macOS; POSIX `fcntl` locking is required. The plugin declares no additional
 runtime Python dependencies. It is not enabled automatically after installation;

@@ -963,6 +963,160 @@ def test_material_mismatch_marks_case_stale_without_blocking_more_research(tmp_p
     assert revised["replay"]["usable"] is True
 
 
+def test_show_and_resume_return_a_bounded_derived_brief(tmp_path):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="session-1")
+    harness.model(
+        {
+            "operation": "pause",
+            "reason": "Blocked by transport; analysis delivered in chat. Waiting for a clean resume.",
+        },
+        session_id="session-1",
+    )
+
+    shown = harness.model(
+        {"operation": "show", "case_id": "research-case"},
+        session_id="session-1",
+    )
+    brief = shown["brief"]
+    assert brief["last_pause"]["reason"].startswith("Blocked by transport")
+    assert brief["last_pause"]["at"]
+    assert brief["counts"]["events"] == len(harness.store.list_events("research-case"))
+    assert "args" not in json.dumps(brief)
+    assert "result" not in json.dumps(brief)
+
+    resumed = harness.model(
+        {"operation": "resume", "case_id": "research-case"},
+        session_id="session-1",
+    )
+    assert resumed["brief"]["last_pause"]["reason"].startswith("Blocked by transport")
+
+
+def test_brief_reports_last_revision_and_evidence_without_probe_payloads(tmp_path):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="session-1")
+    harness.model(
+        {
+            "operation": "record_evidence",
+            "evidence": [
+                {
+                    "summary": "The inspected source bears on the bounded claim",
+                    "source_ref": "https://example.test/source",
+                    "source_role": "primary",
+                    "access_scope": "full",
+                    "authority_domain": "external_source",
+                }
+            ],
+        },
+        session_id="session-1",
+    )
+    harness.model(
+        {
+            "operation": "revise",
+            "top_unknown": "Which account explains the process after the source",
+            "reason": "The source narrows the candidate accounts",
+        },
+        session_id="session-1",
+    )
+    harness.probe(
+        {
+            "operation": "commit",
+            "purpose": "learn",
+            "unknown_or_goal": "What the source says",
+            "tool_name": "read_file",
+            "tool_args": {"path": "SECRET-ARG-123"},
+            "predicted_outcomes": [{"outcome": "found", "meaning": "Evidence exists"}],
+            "why_this_action": "Inspect the bounded source",
+            "would_change_belief": "The source contradicts the claim",
+            "authority_domain": "external_source",
+        },
+        session_id="session-1",
+    )
+
+    shown = harness.model(
+        {"operation": "show", "case_id": "research-case"},
+        session_id="session-1",
+    )
+    brief = shown["brief"]
+    assert brief["last_evidence"]["summary"].startswith("The inspected source")
+    assert brief["last_revision"]["reason"].startswith("The source narrows")
+    assert brief["last_revision"]["changed_fields"] == ["top_unknown"]
+    assert brief["pending_probe"]["status"] == "committed"
+    assert brief["pending_probe"]["tool_name"] == "read_file"
+    encoded = json.dumps(brief)
+    assert "SECRET-ARG-123" not in encoded
+    assert "tool_args" not in encoded
+    assert "predicted_outcomes" not in encoded
+
+
+def test_brief_caps_long_reasons(tmp_path):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="session-1")
+    harness.model(
+        {"operation": "pause", "reason": "x" * 900},
+        session_id="session-1",
+    )
+    shown = harness.model(
+        {"operation": "show", "case_id": "research-case"},
+        session_id="session-1",
+    )
+    assert len(shown["brief"]["last_pause"]["reason"]) <= 303
+
+
+def test_brief_uses_latest_exposure_status(tmp_path, monkeypatch):
+    harness = EpistemicHarness(tmp_path)
+    events = [
+        {
+            "event_id": "E000001",
+            "type": "probe_observed",
+            "timestamp": "2026-10-27T12:00:00+00:00",
+            "payload": {
+                "probe_id": "PR000001",
+                "tool_name": "read_file",
+                "result_status": "ok",
+                "raw_result_provenance": "native",
+            },
+        },
+        {
+            "event_id": "E000002",
+            "type": "probe_exposed",
+            "timestamp": "2026-10-27T12:00:01+00:00",
+            "payload": {
+                "probe_id": "PR000001",
+                "supersedes_event_id": "E000001",
+                "display_result_status": "tool_error",
+            },
+        },
+    ]
+    monkeypatch.setattr(harness.store, "list_events", lambda case_id: events)
+
+    brief = harness._case_brief({"case_id": "research-case"})
+
+    assert brief["last_observation"]["at"] == "2026-10-27T12:00:01+00:00"
+    assert brief["last_observation"]["status"] == "unknown"
+    assert brief["counts"]["observations"] == 2
+
+
+def test_show_of_closed_case_returns_a_brief(tmp_path):
+    harness = EpistemicHarness(tmp_path)
+    harness.model(_open_args(), session_id="session-1")
+    harness.model(
+        {
+            "operation": "close",
+            "outcome": "unresolved",
+            "summary": "The bounded case reached its stopping condition",
+            "transfer": {"decision": "none"},
+        },
+        session_id="session-1",
+    )
+    shown = harness.model(
+        {"operation": "show", "case_id": "research-case"},
+        session_id="session-1",
+    )
+    assert shown["brief"]["counts"]["events"] >= 2
+    assert shown["brief"]["last_pause"] is None
+
+
 def test_pause_resume_and_close_retire_gateway_without_losing_case(tmp_path):
     harness = EpistemicHarness(tmp_path)
     harness.model(_open_args(), session_id="session-1")

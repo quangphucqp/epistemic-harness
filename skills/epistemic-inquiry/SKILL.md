@@ -248,6 +248,13 @@ The full readback is the authoritative model-facing receipt. Durable case state,
 Timeline events, captured tool results, and replay validation remain unchanged
 by response detail.
 
+`show` and `resume` also return a bounded `brief` derived from the existing
+Timeline: the last pause reason, last revision reason and changed fields, last
+evidence summary, last observation status, pending-probe identity, and event
+counts. Treat it as an operational display aid, not as evidence. Dedicated
+probe-argument and result fields, source locators, and artifact paths are not
+copied. Free-text reasons and summaries are redacted but may quote a location.
+
 ## Required method consultation
 
 `epistemic_methods` is off by default. When enabled, **you must consult it before
