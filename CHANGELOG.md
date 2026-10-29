@@ -1,5 +1,16 @@
 # Changelog
 
+AI-assisted modification by Luftballon, 2026-10-29.
+
+## 1.4.4
+
+- Rewrote the introduction, example, installation guidance, and limitations for
+  prospective users. Explained which judgments the agent makes and which case
+  rules the plugin enforces.
+- Moved the detailed operational and implementation reference to `TECHNICAL.md`
+  and clarified the plugin description. There is no functional behavior change;
+  the outbound User-Agent now reports 1.4.4.
+
 ## 1.4.3
 
 - `epistemic_model(show)` and `epistemic_model(resume)` now return a bounded
